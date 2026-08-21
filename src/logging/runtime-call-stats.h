@@ -174,6 +174,7 @@ namespace v8::internal {
   V(String_Concat)                                         \
   V(String_NewExternalOneByte)                             \
   V(String_NewExternalTwoByte)                             \
+  V(String_NewFromBytes)                                   \
   V(String_NewFromOneByte)                                 \
   V(String_NewFromTwoByte)                                 \
   V(String_NewFromUtf8)                                    \

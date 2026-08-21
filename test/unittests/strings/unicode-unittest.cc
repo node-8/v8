@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "include/v8-isolate.h"
+#include "include/v8-primitive.h"
 #include "src/base/vector.h"
 #include "src/heap/factory.h"
 #include "src/objects/string-inl.h"
@@ -640,6 +641,25 @@ TEST_F(UnicodeWithGCTest, FlatByteContentDecodesWtf8AtByteOffsets) {
   EXPECT_EQ(kBadChar, malformed.code_point);
   EXPECT_EQ(1, malformed.byte_length);
   EXPECT_EQ(Status::kReplaced, malformed.status);
+}
+
+TEST_F(UnicodeWithGCTest, PublicByteStringApiPreservesRawBytes) {
+  const uint8_t bytes[] = {0x00, 0xE4, 0xB8, 0xAD, 0xE2, 0x28, 0xA1, 0xFF};
+  v8::Isolate* api_isolate = reinterpret_cast<v8::Isolate*>(isolate());
+  v8::HandleScope scope(api_isolate);
+
+  v8::Local<v8::String> string =
+      v8::String::NewFromBytes(api_isolate, bytes, v8::NewStringType::kNormal,
+                               static_cast<int>(sizeof(bytes)))
+          .ToLocalChecked();
+  EXPECT_EQ(static_cast<int>(sizeof(bytes)), string->Length());
+
+  v8::String::ValueView view(api_isolate, string);
+  ASSERT_TRUE(view.is_one_byte());
+  ASSERT_EQ(static_cast<uint32_t>(sizeof(bytes)), view.length());
+  for (size_t i = 0; i < sizeof(bytes); ++i) {
+    EXPECT_EQ(bytes[i], view.bytes()[i]);
+  }
 }
 
 #define GC_INSIDE_NEW_STRING_FROM_UTF8_SUB_STRING(NAME, STRING)               \

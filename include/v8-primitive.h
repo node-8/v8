@@ -484,6 +484,12 @@ class V8_EXPORT String : public Name {
       Isolate* isolate, const char* data,
       NewStringType type = NewStringType::kNormal, int length = -1);
 
+  /** Allocates a new string by copying raw bytes without validation or
+   * transcoding. Only returns an empty value when length > kMaxLength. **/
+  static V8_WARN_UNUSED_RESULT MaybeLocal<String> NewFromBytes(
+      Isolate* isolate, const uint8_t* data,
+      NewStringType type = NewStringType::kNormal, int length = -1);
+
   /** Allocates a new string from Latin-1 data.  Only returns an empty value
    * when length > kMaxLength. **/
   static V8_WARN_UNUSED_RESULT MaybeLocal<String> NewFromOneByte(
@@ -659,6 +665,7 @@ class V8_EXPORT String : public Name {
 #endif
       return data8_;
     }
+    const uint8_t* bytes() const { return data8(); }
     const uint16_t* data16() const {
 #if V8_ENABLE_CHECKS
       CheckOneByte(false);
