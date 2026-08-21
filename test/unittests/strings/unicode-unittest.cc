@@ -8,6 +8,8 @@
 
 #include "include/v8-isolate.h"
 #include "src/base/vector.h"
+#include "src/heap/factory.h"
+#include "src/objects/string-inl.h"
 #include "src/strings/unicode-decoder.h"
 #include "src/strings/unicode-inl.h"
 #include "test/unittests/heap/heap-utils.h"
@@ -578,6 +580,67 @@ TEST(UnicodeTest, IncrementalUTF8DecodingVsNonIncrementalUtf8Decoding) {
 }
 
 class UnicodeWithGCTest : public TestWithHeapInternals {};
+
+TEST_F(UnicodeWithGCTest, FlatByteContentDecodesWtf8AtByteOffsets) {
+  using Policy = Wtf8ByteCursor::Policy;
+  using Status = Wtf8ByteCursor::Status;
+  constexpr unibrow::uchar kBadChar = unibrow::Utf8::kBadChar;
+  const std::vector<uint8_t> bytes = {0x41, 0xF0, 0x9F, 0x98, 0x80, 0xED,
+                                      0xA0, 0x80, 0xE2, 0x28, 0xA1};
+
+  v8::HandleScope scope(reinterpret_cast<v8::Isolate*>(isolate()));
+  DirectHandle<String> string =
+      isolate()
+          ->factory()
+          ->NewStringFromOneByte(base::VectorOf(bytes))
+          .ToHandleChecked();
+
+  DisallowGarbageCollection no_gc;
+  String::FlatContent content = string->GetFlatContent(no_gc);
+  ASSERT_TRUE(content.IsOneByte());
+
+  base::Vector<const uint8_t> byte_view = content.ToByteVector();
+  ASSERT_EQ(bytes.size(), byte_view.size());
+  for (size_t i = 0; i < bytes.size(); ++i) {
+    EXPECT_EQ(bytes[i], byte_view[i]);
+  }
+
+  Wtf8ByteCursor::Result scalar =
+      content.DecodeWtf8At(1, Policy::kInternalWtf8);
+  EXPECT_EQ(0x1F600, scalar.code_point);
+  EXPECT_EQ(4, scalar.byte_length);
+  EXPECT_EQ(Status::kValid, scalar.status);
+
+  Wtf8ByteCursor::Result continuation =
+      content.DecodeWtf8At(2, Policy::kInternalWtf8);
+  EXPECT_EQ(kBadChar, continuation.code_point);
+  EXPECT_EQ(1, continuation.byte_length);
+  EXPECT_EQ(Status::kReplaced, continuation.status);
+
+  Wtf8ByteCursor::Result internal_surrogate =
+      content.DecodeWtf8At(5, Policy::kInternalWtf8);
+  EXPECT_EQ(0xD800, internal_surrogate.code_point);
+  EXPECT_EQ(3, internal_surrogate.byte_length);
+  EXPECT_EQ(Status::kValid, internal_surrogate.status);
+
+  Wtf8ByteCursor::Result web_surrogate =
+      content.DecodeWtf8At(5, Policy::kWebScalar);
+  EXPECT_EQ(kBadChar, web_surrogate.code_point);
+  EXPECT_EQ(3, web_surrogate.byte_length);
+  EXPECT_EQ(Status::kReplaced, web_surrogate.status);
+
+  Wtf8ByteCursor::Result strict_surrogate =
+      content.DecodeWtf8At(5, Policy::kStrictScalar);
+  EXPECT_EQ(kBadChar, strict_surrogate.code_point);
+  EXPECT_EQ(3, strict_surrogate.byte_length);
+  EXPECT_EQ(Status::kInvalid, strict_surrogate.status);
+
+  Wtf8ByteCursor::Result malformed =
+      content.DecodeWtf8At(8, Policy::kInternalWtf8);
+  EXPECT_EQ(kBadChar, malformed.code_point);
+  EXPECT_EQ(1, malformed.byte_length);
+  EXPECT_EQ(Status::kReplaced, malformed.status);
+}
 
 #define GC_INSIDE_NEW_STRING_FROM_UTF8_SUB_STRING(NAME, STRING)               \
   TEST_F(UnicodeWithGCTest, GCInsideNewStringFromUtf8SubStringWith##NAME) {   \

@@ -143,8 +143,22 @@ V8_OBJECT class String : public Name {
     // Return the one byte content of the string. Only use if IsOneByte()
     // returns true.
     base::Vector<const uint8_t> ToOneByteVector() const {
+      return ToByteVector();
+    }
+
+    // Return the raw byte content of the string. This is the encoding-neutral
+    // name for byte-oriented node-8 consumers. Only use if IsOneByte() returns
+    // true while the two-byte representation still exists.
+    base::Vector<const uint8_t> ToByteVector() const {
       DCHECK_EQ(ONE_BYTE, state_);
       return base::Vector<const uint8_t>(onebyte_start, length_);
+    }
+
+    Wtf8ByteCursor::Result DecodeWtf8At(size_t byte_offset,
+                                        Wtf8ByteCursor::Policy policy) const {
+      DCHECK_LT(byte_offset, length_);
+      Wtf8ByteCursor cursor(ToByteVector(), policy, byte_offset);
+      return cursor.DecodeNext();
     }
     // Return the two-byte content of the string. Only use if IsTwoByte()
     // returns true.
