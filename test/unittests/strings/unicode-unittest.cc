@@ -65,7 +65,89 @@ void DecodeIncrementally(const std::vector<uint8_t>& bytes,
   }
 }
 
+struct ExpectedWtf8ByteResult {
+  unibrow::uchar code_point;
+  size_t byte_length;
+  Wtf8ByteCursor::Status status;
+};
+
+void ExpectWtf8ByteResults(
+    const std::vector<uint8_t>& bytes, Wtf8ByteCursor::Policy policy,
+    size_t start, const std::vector<ExpectedWtf8ByteResult>& expected) {
+  Wtf8ByteCursor cursor(base::VectorOf(bytes), policy, start);
+  size_t expected_position = start;
+
+  for (const auto& expected_result : expected) {
+    ASSERT_TRUE(cursor.has_next());
+    Wtf8ByteCursor::Result actual = cursor.DecodeNext();
+    EXPECT_EQ(expected_result.code_point, actual.code_point);
+    EXPECT_EQ(expected_result.byte_length, actual.byte_length);
+    EXPECT_EQ(expected_result.status, actual.status);
+    expected_position += expected_result.byte_length;
+    EXPECT_EQ(expected_position, cursor.position());
+  }
+
+  EXPECT_FALSE(cursor.has_next());
+}
+
 }  // namespace
+
+TEST(UnicodeTest, Wtf8ByteCursorCanonicalScalars) {
+  using Status = Wtf8ByteCursor::Status;
+  ExpectWtf8ByteResults(
+      {0x41, 0xC2, 0xA9, 0xE4, 0xB8, 0xAD, 0xF0, 0x9F, 0x98, 0x80},
+      Wtf8ByteCursor::Policy::kInternalWtf8, 0,
+      {{0x41, 1, Status::kValid},
+       {0xA9, 2, Status::kValid},
+       {0x4E2D, 3, Status::kValid},
+       {0x1F600, 4, Status::kValid}});
+}
+
+TEST(UnicodeTest, Wtf8ByteCursorPolicies) {
+  using Policy = Wtf8ByteCursor::Policy;
+  using Status = Wtf8ByteCursor::Status;
+  const std::vector<uint8_t> surrogate = {0xED, 0xA0, 0x80};
+
+  ExpectWtf8ByteResults(surrogate, Policy::kInternalWtf8, 0,
+                        {{0xD800, 3, Status::kValid}});
+  ExpectWtf8ByteResults(surrogate, Policy::kWebScalar, 0,
+                        {{unibrow::Utf8::kBadChar, 3, Status::kReplaced}});
+  ExpectWtf8ByteResults(surrogate, Policy::kStrictScalar, 0,
+                        {{unibrow::Utf8::kBadChar, 3, Status::kInvalid}});
+}
+
+TEST(UnicodeTest, Wtf8ByteCursorMalformedInput) {
+  using Policy = Wtf8ByteCursor::Policy;
+  using Status = Wtf8ByteCursor::Status;
+  constexpr unibrow::uchar kBadChar = unibrow::Utf8::kBadChar;
+
+  ExpectWtf8ByteResults({0xE2, 0x28, 0xA1}, Policy::kInternalWtf8, 0,
+                        {{kBadChar, 1, Status::kReplaced},
+                         {0x28, 1, Status::kValid},
+                         {kBadChar, 1, Status::kReplaced}});
+  ExpectWtf8ByteResults({0xE2, 0x82}, Policy::kWebScalar, 0,
+                        {{kBadChar, 2, Status::kReplaced}});
+  ExpectWtf8ByteResults(
+      {0xE0, 0x80}, Policy::kInternalWtf8, 0,
+      {{kBadChar, 1, Status::kReplaced}, {kBadChar, 1, Status::kReplaced}});
+  ExpectWtf8ByteResults(
+      {0xE2, 0x28}, Policy::kStrictScalar, 0,
+      {{kBadChar, 1, Status::kInvalid}, {0x28, 1, Status::kValid}});
+}
+
+TEST(UnicodeTest, Wtf8ByteCursorStartsAtContinuationByte) {
+  using Status = Wtf8ByteCursor::Status;
+  ExpectWtf8ByteResults({0xC3, 0xA9}, Wtf8ByteCursor::Policy::kInternalWtf8, 1,
+                        {{unibrow::Utf8::kBadChar, 1, Status::kReplaced}});
+}
+
+TEST(UnicodeTest, Wtf8ByteCursorPreservesAdjacentSurrogates) {
+  using Status = Wtf8ByteCursor::Status;
+  ExpectWtf8ByteResults(
+      {0xED, 0xA0, 0xBD, 0xED, 0xB8, 0x80},
+      Wtf8ByteCursor::Policy::kInternalWtf8, 0,
+      {{0xD83D, 3, Status::kValid}, {0xDE00, 3, Status::kValid}});
+}
 
 TEST(UnicodeTest, Utf16BufferReuse) {
   // Not enough continuation bytes before string ends.

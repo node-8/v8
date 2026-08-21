@@ -48,6 +48,47 @@ inline uint32_t NonAsciiStart(const uint8_t* chars, uint32_t length) {
   return static_cast<uint32_t>(chars - start);
 }
 
+// Allocation-free streaming decoder for node-8 byte strings. Unlike
+// Utf8DecoderBase below, this cursor reports code points and source byte widths
+// directly instead of selecting or materializing a Latin-1/UTF-16 buffer.
+class V8_EXPORT_PRIVATE Wtf8ByteCursor final {
+ public:
+  enum class Policy : uint8_t {
+    // Preserve WTF-8 surrogate code points and replace other malformed input.
+    kInternalWtf8,
+    // Replace both WTF-8 surrogate code points and malformed input.
+    kWebScalar,
+    // Report both WTF-8 surrogate code points and malformed input as invalid.
+    kStrictScalar,
+  };
+
+  enum class Status : uint8_t { kValid, kReplaced, kInvalid };
+
+  struct Result {
+    unibrow::uchar code_point;
+    size_t byte_length;
+    Status status;
+  };
+
+  Wtf8ByteCursor(base::Vector<const uint8_t> bytes, Policy policy,
+                 size_t position = 0)
+      : bytes_(bytes), policy_(policy), position_(position) {
+    DCHECK_LE(position_, bytes_.size());
+  }
+
+  bool has_next() const { return position_ < bytes_.size(); }
+  size_t position() const { return position_; }
+
+  Result DecodeNext();
+
+ private:
+  Result MalformedResult(size_t byte_length);
+
+  base::Vector<const uint8_t> bytes_;
+  Policy policy_;
+  size_t position_;
+};
+
 template <class Decoder>
 class Utf8DecoderBase {
  public:

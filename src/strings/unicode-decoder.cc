@@ -6,10 +6,7 @@
 
 #include "src/strings/unicode-inl.h"
 #include "src/utils/memcopy.h"
-
-#if V8_ENABLE_WEBASSEMBLY
 #include "third_party/utf8-decoder/generalized-utf8-decoder.h"
-#endif
 
 namespace v8 {
 namespace internal {
@@ -55,6 +52,55 @@ struct DecoderTraits<StrictUtf8Decoder> {
 };
 #endif  // V8_ENABLE_WEBASSEMBLY
 }  // namespace
+
+Wtf8ByteCursor::Result Wtf8ByteCursor::MalformedResult(size_t byte_length) {
+  DCHECK_GT(byte_length, 0);
+  Status status =
+      policy_ == Policy::kStrictScalar ? Status::kInvalid : Status::kReplaced;
+  return {unibrow::Utf8::kBadChar, byte_length, status};
+}
+
+Wtf8ByteCursor::Result Wtf8ByteCursor::DecodeNext() {
+  DCHECK(has_next());
+
+  const size_t start = position_;
+  const uint8_t first = bytes_[position_];
+  if (V8_LIKELY(first <= unibrow::Utf8::kMaxOneByteChar)) {
+    position_++;
+    return {first, 1, Status::kValid};
+  }
+
+  auto state = GeneralizedUtf8DfaDecoder::kAccept;
+  uint32_t current = 0;
+
+  while (position_ < bytes_.size()) {
+    auto previous_state = state;
+    GeneralizedUtf8DfaDecoder::Decode(bytes_[position_], &state, &current);
+
+    if (state == GeneralizedUtf8DfaDecoder::kReject) {
+      // An invalid lead byte belongs to this malformed subpart. An invalid
+      // continuation byte is reprocessed as the start of the next result.
+      if (previous_state == GeneralizedUtf8DfaDecoder::kAccept) position_++;
+      return MalformedResult(position_ - start);
+    }
+
+    position_++;
+    if (state != GeneralizedUtf8DfaDecoder::kAccept) continue;
+
+    size_t byte_length = position_ - start;
+    bool is_surrogate = unibrow::Utf16::IsLeadSurrogate(current) ||
+                        unibrow::Utf16::IsTrailSurrogate(current);
+    if (!is_surrogate || policy_ == Policy::kInternalWtf8) {
+      return {current, byte_length, Status::kValid};
+    }
+
+    Status status =
+        policy_ == Policy::kWebScalar ? Status::kReplaced : Status::kInvalid;
+    return {unibrow::Utf8::kBadChar, byte_length, status};
+  }
+
+  return MalformedResult(position_ - start);
+}
 
 template <class Decoder>
 Utf8DecoderBase<Decoder>::Utf8DecoderBase(base::Vector<const uint8_t> data)
