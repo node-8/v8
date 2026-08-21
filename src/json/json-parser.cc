@@ -6,6 +6,7 @@
 
 #include <optional>
 
+#include "hwy/highway.h"
 #include "src/base/small-vector.h"
 #include "src/base/strings.h"
 #include "src/builtins/builtins.h"
@@ -129,6 +130,33 @@ static const constexpr uint8_t character_json_scan_flags[256] = {
         INT_0_TO_127_LIST(CALL_GET_SCAN_FLAGS)
 #undef CALL_GET_SCAN_FLAGS
 };
+
+V8_INLINE const uint8_t* FindJsonStringTerminator(const uint8_t* cursor,
+                                                   const uint8_t* end) {
+  namespace hw = hwy::HWY_NAMESPACE;
+  hw::FixedTag<uint8_t, 16> tag;
+  static const size_t stride = hw::Lanes(tag);
+  const auto mask_0x20 = hw::Set(tag, 0x20);
+  const auto mask_0x22 = hw::Set(tag, 0x22);
+  const auto mask_0x5c = hw::Set(tag, 0x5c);
+
+  while (cursor + (stride - 1) < end) {
+    const auto input = hw::LoadU(tag, cursor);
+    const auto has_lower_than_0x20 = hw::Lt(input, mask_0x20);
+    const auto has_0x22 = hw::Eq(input, mask_0x22);
+    const auto has_0x5c = hw::Eq(input, mask_0x5c);
+    const auto result =
+        hw::Or(hw::Or(has_lower_than_0x20, has_0x22), has_0x5c);
+    if (V8_UNLIKELY(!hw::AllFalse(tag, result))) {
+      return cursor + hw::FindKnownFirstTrue(tag, result);
+    }
+    cursor += stride;
+  }
+
+  return std::find_if(cursor, end, [](uint8_t c) {
+    return MayTerminateJsonString(character_json_scan_flags[c]);
+  });
+}
 
 #define EXPECT_RETURN_ON_ERROR(token, msg, ret) \
   if (V8_UNLIKELY(!Expect<token>(msg))) {       \
@@ -2516,13 +2544,20 @@ JsonString JsonParser<Char>::ScanJsonString(bool needs_internalization) {
   base::uc32 bits = 0;
 
   while (true) {
-    cursor_ = std::find_if(cursor_, end_, [&bits](Char c) {
-      if (sizeof(Char) == 2 && V8_UNLIKELY(c > unibrow::Latin1::kMaxChar)) {
-        bits |= c;
-        return false;
-      }
-      return MayTerminateJsonString(character_json_scan_flags[c]);
-    });
+    if constexpr (sizeof(Char) == 1) {
+      const uint8_t* cursor = reinterpret_cast<const uint8_t*>(cursor_);
+      const uint8_t* end = reinterpret_cast<const uint8_t*>(end_);
+      cursor_ = reinterpret_cast<const Char*>(
+          FindJsonStringTerminator(cursor, end));
+    } else {
+      cursor_ = std::find_if(cursor_, end_, [&bits](Char c) {
+        if (V8_UNLIKELY(c > unibrow::Latin1::kMaxChar)) {
+          bits |= c;
+          return false;
+        }
+        return MayTerminateJsonString(character_json_scan_flags[c]);
+      });
+    }
 
     if (V8_UNLIKELY(is_at_end())) {
       AllowGarbageCollection allow_before_exception;
