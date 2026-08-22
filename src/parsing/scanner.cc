@@ -14,6 +14,7 @@
 #include "src/ast/ast-value-factory.h"
 #include "src/base/strings.h"
 #include "src/base/vlq-base64.h"
+#include "src/flags/flags.h"
 #include "src/numbers/conversions-inl.h"
 #include "src/numbers/conversions.h"
 #include "src/objects/bigint.h"
@@ -523,7 +524,7 @@ bool Scanner::ScanEscape() {
   }
 
   // Other escaped characters are interpreted as their non-escaped version.
-  if (is_raw_byte) {
+  if (is_raw_byte && v8_flags.node_8_string_semantics) {
     AddLiteralByte(static_cast<uint8_t>(c));
   } else {
     AddLiteralChar(c);
@@ -560,7 +561,7 @@ base::uc32 Scanner::ScanOctalEscape(base::uc32 c, int length) {
 Token::Value Scanner::ScanString() {
   base::uc32 quote = c0_;
 
-  next().literal_chars.StartByteString();
+  next().literal_chars.StartByteString(v8_flags.node_8_string_semantics);
   while (true) {
     AdvanceUntil([this](base::uc32 c0) {
       if (V8_UNLIKELY(static_cast<uint32_t>(c0) > kMaxAscii)) {
@@ -636,8 +637,8 @@ Token::Value Scanner::ScanTemplateSpan() {
   ErrorState octal_error_state(&octal_message_, &octal_pos_);
 
   Token::Value result = Token::kTemplateSpan;
-  next().literal_chars.StartByteString();
-  next().raw_literal_chars.StartByteString();
+  next().literal_chars.StartByteString(v8_flags.node_8_string_semantics);
+  next().raw_literal_chars.StartByteString(v8_flags.node_8_string_semantics);
   const bool capture_raw = true;
   while (true) {
     base::uc32 c = c0_;

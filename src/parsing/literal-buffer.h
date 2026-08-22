@@ -86,9 +86,9 @@ class LiteralBuffer final {
         unibrow::Utf16::kNoPreviousCharacter;
   }
 
-  void StartByteString() {
+  void StartByteString(bool enabled) {
     Start();
-    is_byte_string_ = true;
+    is_byte_string_ = enabled;
   }
 
   template <typename IsolateT>
