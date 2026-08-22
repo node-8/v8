@@ -540,6 +540,10 @@ class V8_EXPORT_PRIVATE Scanner {
 
   V8_INLINE void AddLiteralChar(char c) { next().literal_chars.AddChar(c); }
 
+  V8_INLINE void AddLiteralByte(uint8_t byte) {
+    next().literal_chars.AddByte(byte);
+  }
+
   V8_INLINE void AddRawLiteralChar(base::uc32 c) {
     next().raw_literal_chars.AddChar(c);
   }

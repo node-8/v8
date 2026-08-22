@@ -470,6 +470,7 @@ void Scanner::SeekForward(int pos) {
 template <bool capture_raw>
 bool Scanner::ScanEscape() {
   base::uc32 c = c0_;
+  bool is_raw_byte = false;
   Advance<capture_raw>();
 
   // Skip escaped newlines.
@@ -497,6 +498,7 @@ bool Scanner::ScanEscape() {
     case 'x': {
       c = ScanHexNumber<capture_raw>(2);
       if (IsInvalid(c)) return false;
+      is_raw_byte = true;
       break;
     }
     case '0':
@@ -508,6 +510,7 @@ bool Scanner::ScanEscape() {
     case '6':
     case '7':
       c = ScanOctalEscape<capture_raw>(c, 2);
+      is_raw_byte = true;
       break;
     case '8':
     case '9':
@@ -520,7 +523,11 @@ bool Scanner::ScanEscape() {
   }
 
   // Other escaped characters are interpreted as their non-escaped version.
-  AddLiteralChar(c);
+  if (is_raw_byte) {
+    AddLiteralByte(static_cast<uint8_t>(c));
+  } else {
+    AddLiteralChar(c);
+  }
   return true;
 }
 
@@ -553,7 +560,7 @@ base::uc32 Scanner::ScanOctalEscape(base::uc32 c, int length) {
 Token::Value Scanner::ScanString() {
   base::uc32 quote = c0_;
 
-  next().literal_chars.Start();
+  next().literal_chars.StartByteString();
   while (true) {
     AdvanceUntil([this](base::uc32 c0) {
       if (V8_UNLIKELY(static_cast<uint32_t>(c0) > kMaxAscii)) {
@@ -629,8 +636,8 @@ Token::Value Scanner::ScanTemplateSpan() {
   ErrorState octal_error_state(&octal_message_, &octal_pos_);
 
   Token::Value result = Token::kTemplateSpan;
-  next().literal_chars.Start();
-  next().raw_literal_chars.Start();
+  next().literal_chars.StartByteString();
+  next().raw_literal_chars.StartByteString();
   const bool capture_raw = true;
   while (true) {
     base::uc32 c = c0_;

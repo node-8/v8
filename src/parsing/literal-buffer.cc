@@ -8,6 +8,7 @@
 #include "src/execution/isolate.h"
 #include "src/execution/local-isolate.h"
 #include "src/heap/factory.h"
+#include "src/strings/unicode-inl.h"
 #include "src/utils/memcopy.h"
 
 namespace v8 {
@@ -83,6 +84,22 @@ void LiteralBuffer::AddTwoByteChar(base::uc32 code_unit) {
         unibrow::Utf16::TrailSurrogate(code_unit);
     position_ += base::kUC16Size;
   }
+}
+
+void LiteralBuffer::AddByteStringChar(base::uc32 code_unit) {
+  DCHECK(is_byte_string_);
+  DCHECK(is_one_byte());
+  constexpr int kMaxEncodedSize =
+      static_cast<int>(unibrow::Utf8::kMaxEncodedSize);
+  while (position_ + kMaxEncodedSize > backing_store_.length()) {
+    ExpandBuffer();
+  }
+
+  char* destination =
+      reinterpret_cast<char*>(backing_store_.begin() + position_);
+  position_ += static_cast<int>(unibrow::Utf8::Encode(
+      destination, code_unit, previous_byte_string_code_unit_, false));
+  previous_byte_string_code_unit_ = code_unit;
 }
 
 }  // namespace internal

@@ -24,10 +24,18 @@ class LiteralBuffer final {
 
   V8_INLINE void AddChar(char code_unit) {
     DCHECK(IsValidAscii(code_unit));
+    if (is_byte_string_) {
+      AddByteStringChar(static_cast<uint8_t>(code_unit));
+      return;
+    }
     AddOneByteChar(static_cast<uint8_t>(code_unit));
   }
 
   V8_INLINE void AddChar(base::uc32 code_unit) {
+    if (is_byte_string_) {
+      AddByteStringChar(code_unit);
+      return;
+    }
     if (is_one_byte()) {
       if (code_unit <= static_cast<base::uc32>(unibrow::Latin1::kMaxChar)) {
         AddOneByteChar(static_cast<uint8_t>(code_unit));
@@ -36,6 +44,12 @@ class LiteralBuffer final {
       ConvertToTwoByte();
     }
     AddTwoByteChar(code_unit);
+  }
+
+  V8_INLINE void AddByte(uint8_t byte) {
+    DCHECK(is_byte_string_);
+    previous_byte_string_code_unit_ = unibrow::Utf16::kNoPreviousCharacter;
+    AddOneByteChar(byte);
   }
 
   bool is_one_byte() const { return is_one_byte_; }
@@ -67,6 +81,14 @@ class LiteralBuffer final {
   void Start() {
     position_ = 0;
     is_one_byte_ = true;
+    is_byte_string_ = false;
+    previous_byte_string_code_unit_ =
+        unibrow::Utf16::kNoPreviousCharacter;
+  }
+
+  void StartByteString() {
+    Start();
+    is_byte_string_ = true;
   }
 
   template <typename IsolateT>
@@ -93,6 +115,7 @@ class LiteralBuffer final {
   }
 
   void AddTwoByteChar(base::uc32 code_unit);
+  void AddByteStringChar(base::uc32 code_unit);
   int NewCapacity(int min_capacity);
   V8_NOINLINE V8_PRESERVE_MOST void ExpandBuffer();
   void ConvertToTwoByte();
@@ -100,6 +123,9 @@ class LiteralBuffer final {
   base::Vector<uint8_t> backing_store_;
   int position_ = 0;
   bool is_one_byte_ = true;
+  bool is_byte_string_ = false;
+  int previous_byte_string_code_unit_ =
+      unibrow::Utf16::kNoPreviousCharacter;
 };
 
 }  // namespace internal
