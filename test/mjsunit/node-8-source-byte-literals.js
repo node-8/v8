@@ -27,6 +27,11 @@ assertEquals(
 assertNotEquals('\xE9', '\u00E9');
 assertSame('é', 'é');
 
+// Temporary compatibility boundary: the legacy RegExp parser decodes a
+// non-ASCII byte pattern once without creating a UTF-16 heap String.
+assertDoesNotThrow(() => new RegExp('\u00E9'));
+assertDoesNotThrow(() => new RegExp('[ªµºÀ-ÖØ-öø-ÿ]'));
+
 const subject = 'é中文Z';
 const needle = '中文';
 const index = subject.indexOf(needle);

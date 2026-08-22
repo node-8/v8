@@ -11,6 +11,7 @@
 #include "src/regexp/regexp-macro-assembler.h"
 #include "src/regexp/regexp.h"
 #include "src/strings/char-predicates-inl.h"
+#include "src/strings/unicode-decoder.h"
 #include "src/utils/ostreams.h"
 #include "src/utils/utils.h"
 #include "src/zone/zone-allocator.h"
@@ -3302,6 +3303,25 @@ bool RegExpParser::ParseRegExpFromHeapString(Isolate* isolate, Zone* zone,
   String::FlatContent content = input->GetFlatContent(no_gc);
   if (content.IsOneByte()) {
     base::Vector<const uint8_t> v = content.ToOneByteVector();
+    bool is_ascii = true;
+    for (uint8_t byte : v) {
+      if (byte > unibrow::Utf8::kMaxOneByteChar) {
+        is_ascii = false;
+        break;
+      }
+    }
+    if (!is_ascii) {
+      ZoneVector<base::uc16> decoded(zone);
+      decoded.reserve(v.length());
+      Wtf8ByteCursor cursor(v, Wtf8ByteCursor::Policy::kInternalWtf8);
+      while (cursor.has_next()) {
+        push_code_unit(&decoded, cursor.DecodeNext().code_point);
+      }
+      return RegExpParserImpl<base::uc16>{
+          decoded.data(), static_cast<int>(decoded.size()), flags,
+          stack_limit,    zone,                             no_gc}
+          .Parse(result);
+    }
     return RegExpParserImpl<uint8_t>{v.begin(),   v.length(), flags,
                                      stack_limit, zone,       no_gc}
         .Parse(result);
