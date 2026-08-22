@@ -161,6 +161,8 @@ BIT_FIELD_ACCESSORS(IrRegExpData, bit_field, can_be_zero_length,
                     IrRegExpData::Bits::CanBeZeroLengthBit)
 BIT_FIELD_ACCESSORS(IrRegExpData, bit_field, is_linear_executable,
                     IrRegExpData::Bits::IsLinearExecutableBit)
+BIT_FIELD_ACCESSORS(IrRegExpData, bit_field, is_wtf8_dot,
+                    IrRegExpData::Bits::IsWtf8DotBit)
 
 }  // namespace internal
 }  // namespace v8

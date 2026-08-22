@@ -25,6 +25,8 @@
 #include "src/regexp/regexp-stack.h"
 #include "src/regexp/regexp-utils.h"
 #include "src/strings/string-search.h"
+#include "src/strings/unicode-inl.h"
+#include "src/strings/unicode.h"
 #include "src/utils/ostreams.h"
 
 namespace v8 {
@@ -199,6 +201,45 @@ bool HasFewDifferentCharacters(DirectHandle<String> pattern) {
   return true;
 }
 
+bool IsAsciiPattern(DirectHandle<String> pattern) {
+  DisallowGarbageCollection no_gc;
+  String::FlatContent content = pattern->GetFlatContent(no_gc);
+  if (!content.IsOneByte()) return false;
+  for (uint8_t byte : content.ToByteVector()) {
+    if (!IsAscii(byte)) return false;
+  }
+  return true;
+}
+
+MaybeDirectHandle<String> NewWtf8AtomString(
+    Isolate* isolate, DirectHandle<String> source,
+    base::Vector<const base::uc16> pattern) {
+  source = String::Flatten(isolate, source);
+  if (String::IsOneByteRepresentationUnderneath(*source)) {
+    DisallowGarbageCollection no_gc;
+    String::FlatContent content = source->GetFlatContent(no_gc);
+    if (content.IsOneByte()) {
+      Wtf8ByteCursor cursor(content.ToByteVector(),
+                            Wtf8ByteCursor::Policy::kInternalWtf8);
+      while (cursor.has_next()) {
+        if (cursor.DecodeNext().status == Wtf8ByteCursor::Status::kReplaced) {
+          // The parser preserves malformed source bytes in the atom data.
+          // Keep those bytes raw instead of turning U+00xx into canonical
+          // UTF-8.
+          return source;
+        }
+      }
+    }
+  }
+  std::vector<uint8_t> bytes(pattern.length() * 3);
+  unibrow::Utf8::EncodingResult encoded = unibrow::Utf8::Encode(
+      pattern, reinterpret_cast<char*>(bytes.data()), bytes.size(), false,
+      false);
+  CHECK_EQ(encoded.characters_processed, pattern.size());
+  return isolate->factory()->NewStringFromOneByte(
+      base::Vector<const uint8_t>(bytes.data(), encoded.bytes_written));
+}
+
 }  // namespace
 
 // Generic RegExp methods. Dispatches to implementation specific methods.
@@ -266,7 +307,7 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
                                    parse_result.capture_count);
     has_been_compiled = true;
   } else if (parse_result.simple && !IsIgnoreCase(flags) && !IsSticky(flags) &&
-             !HasFewDifferentCharacters(pattern)) {
+             IsAsciiPattern(pattern) && !HasFewDifferentCharacters(pattern)) {
     // Parse-tree is a single atom that is equal to the pattern.
     RegExpImpl::AtomCompile(isolate, re, pattern, flags, pattern);
     has_been_compiled = true;
@@ -279,7 +320,7 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
     DirectHandle<String> atom_string;
     ASSIGN_RETURN_ON_EXCEPTION(
         isolate, atom_string,
-        isolate->factory()->NewStringFromTwoByte(atom_pattern));
+        NewWtf8AtomString(isolate, pattern, atom_pattern));
     if (!IsIgnoreCase(flags) && !HasFewDifferentCharacters(atom_string)) {
       RegExpImpl::AtomCompile(isolate, re, pattern, flags, atom_string);
       has_been_compiled = true;
@@ -287,10 +328,12 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
   }
   if (!has_been_compiled) {
     const bool can_be_zero_length = parse_result.tree->min_match() == 0;
+    const bool is_wtf8_dot = pattern->length() == 1 && pattern->Get(0) == '.';
     using Bits = IrRegExpData::Bits;
     const uint32_t bit_field =
         Bits::CanBeZeroLengthBit::encode(can_be_zero_length) |
-        Bits::IsLinearExecutableBit::encode(is_linear_executable);
+        Bits::IsLinearExecutableBit::encode(is_linear_executable) |
+        Bits::IsWtf8DotBit::encode(is_wtf8_dot);
     RegExpImpl::IrregexpInitialize(isolate, re, pattern, flags,
                                    parse_result.capture_count, backtrack_limit,
                                    bit_field);
@@ -533,6 +576,60 @@ int RegExpImpl::AtomExec(Isolate* isolate, DirectHandle<AtomRegExpData> re_data,
 
   DCHECK(res == RegExp::RE_FAILURE || res == RegExp::RE_SUCCESS);
   return res;
+}
+
+namespace {
+
+int Wtf8DotExecRawImpl(const String::FlatContent& subject, int index,
+                       RegExpFlags flags, int32_t* output, int output_size) {
+  DCHECK(subject.IsOneByte());
+  DCHECK_GE(index, 0);
+  DCHECK_LE(index, subject.length());
+  CHECK_EQ(output_size % JSRegExp::kAtomRegisterCount, 0);
+
+  const bool global = IsGlobal(flags);
+  const bool sticky = IsSticky(flags);
+  const bool dot_all = IsDotAll(flags);
+  const int max_matches =
+      global ? output_size / JSRegExp::kAtomRegisterCount : 1;
+  int matches = 0;
+  Wtf8ByteCursor cursor(subject.ToByteVector(),
+                        Wtf8ByteCursor::Policy::kInternalWtf8, index);
+
+  while (matches < max_matches && cursor.has_next()) {
+    int start = static_cast<int>(cursor.position());
+    Wtf8ByteCursor::Result result = cursor.DecodeNext();
+    if (!dot_all && unibrow::IsLineTerminator(result.code_point)) {
+      if (sticky) break;
+      continue;
+    }
+
+    int offset = matches * JSRegExp::kAtomRegisterCount;
+    output[offset] = start;
+    output[offset + 1] = static_cast<int>(cursor.position());
+    matches++;
+    if (!global) break;
+  }
+
+  return matches;
+}
+
+}  // namespace
+
+// static
+intptr_t RegExp::Wtf8DotExecRaw(Isolate* isolate,
+                                Address /* IrRegExpData */ data_address,
+                                Address /* String */ subject_address,
+                                int32_t index, int32_t* result_offsets_vector,
+                                int32_t result_offsets_vector_length) {
+  DisallowGarbageCollection no_gc;
+  auto data = SbxCast<IrRegExpData>(Tagged<Object>(data_address));
+  auto subject = Cast<String>(Tagged<Object>(subject_address));
+  DCHECK(data->is_wtf8_dot());
+  String::FlatContent subject_content = subject->GetFlatContent(no_gc);
+  return Wtf8DotExecRawImpl(
+      subject_content, index, JSRegExp::AsRegExpFlags(data->flags()),
+      result_offsets_vector, result_offsets_vector_length);
 }
 
 // Irregexp implementation.
@@ -1022,6 +1119,16 @@ std::optional<int> RegExpImpl::IrregexpExec(
     DirectHandle<String> subject, int previous_index,
     int32_t* result_offsets_vector, uint32_t result_offsets_vector_length) {
   subject = String::Flatten(isolate, subject);
+
+  if (regexp_data->is_wtf8_dot() &&
+      String::IsOneByteRepresentationUnderneath(*subject)) {
+    CHECK_LE(result_offsets_vector_length,
+             static_cast<uint32_t>(std::numeric_limits<int32_t>::max()));
+    return static_cast<int>(RegExp::Wtf8DotExecRaw(
+        isolate, regexp_data->ptr(), subject->ptr(), previous_index,
+        result_offsets_vector,
+        static_cast<int32_t>(result_offsets_vector_length)));
+  }
 
   const int original_register_count =
       JSRegExp::RegistersForCaptureCount(regexp_data->capture_count());

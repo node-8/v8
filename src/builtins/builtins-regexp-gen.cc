@@ -634,7 +634,8 @@ TNode<UintPtrT> RegExpBuiltinsAssembler::RegExpExecInternal(
   ToDirectStringAssembler to_direct(state(), string);
 
   TVARIABLE(UintPtrT, var_result, UintPtrConstant(0));
-  Label out(this), atom(this), runtime(this, Label::kDeferred),
+  Label out(this), atom(this), irregexp(this), regexp_engine(this),
+      runtime(this, Label::kDeferred),
       retry_experimental(this, Label::kDeferred);
 
   // At this point, last_index is definitely a canonicalized non-negative
@@ -667,7 +668,7 @@ TNode<UintPtrT> RegExpBuiltinsAssembler::RegExpExecInternal(
   // RegExpData as IrRegExpData/AtomRegExpData in the respective branches
   // without checks.
   {
-    Label next(this), unreachable(this, Label::kDeferred);
+    Label unreachable(this, Label::kDeferred);
     TNode<Int32T> tag =
         SmiToInt32(LoadObjectField<Smi>(data, RegExpData::kTypeTagOffset));
 
@@ -676,16 +677,29 @@ TNode<UintPtrT> RegExpBuiltinsAssembler::RegExpExecInternal(
         static_cast<uint8_t>(RegExpData::Type::ATOM),
         static_cast<uint8_t>(RegExpData::Type::EXPERIMENTAL),
     };
-    Label* labels[] = {&next, &atom, &next};
+    Label* labels[] = {&irregexp, &atom, &regexp_engine};
 
     static_assert(arraysize(values) == arraysize(labels));
     Switch(tag, &unreachable, values, labels, arraysize(values));
 
     BIND(&unreachable);
     Unreachable();
-
-    BIND(&next);
   }
+
+  BIND(&irregexp);
+  {
+    TNode<Uint32T> bit_field = Unsigned(SmiToInt32(
+        LoadObjectField<Smi>(data, IrRegExpData::kBitFieldOffset)));
+    GotoIfNot(IsSetWord32<IrRegExpData::Bits::IsWtf8DotBit>(bit_field),
+              &regexp_engine);
+    GotoIfNot(to_direct.IsOneByte(), &regexp_engine);
+    var_result = RegExpExecWtf8Dot(
+        CAST(data), string, CAST(last_index), result_offsets_vector,
+        result_offsets_vector_length);
+    Goto(&out);
+  }
+
+  BIND(&regexp_engine);
 
   // Check (number_of_captures + 1) * 2 <= offsets vector size.
   CSA_DCHECK(
@@ -1070,6 +1084,23 @@ TNode<UintPtrT> RegExpBuiltinsAssembler::RegExpExecAtom(
     TNode<RawPtrT> result_offsets_vector,
     TNode<Int32T> result_offsets_vector_length) {
   auto f = ExternalConstant(ExternalReference::re_atom_exec_raw());
+  auto isolate_ptr = ExternalConstant(ExternalReference::isolate_address());
+  auto result = UncheckedCast<IntPtrT>(CallCFunction(
+      f, MachineType::IntPtr(),
+      std::make_pair(MachineType::Pointer(), isolate_ptr),
+      std::make_pair(MachineType::TaggedPointer(), data),
+      std::make_pair(MachineType::TaggedPointer(), subject_string),
+      std::make_pair(MachineType::Int32(), SmiToInt32(last_index)),
+      std::make_pair(MachineType::Pointer(), result_offsets_vector),
+      std::make_pair(MachineType::Int32(), result_offsets_vector_length)));
+  return Unsigned(result);
+}
+
+TNode<UintPtrT> RegExpBuiltinsAssembler::RegExpExecWtf8Dot(
+    TNode<IrRegExpData> data, TNode<String> subject_string,
+    TNode<Smi> last_index, TNode<RawPtrT> result_offsets_vector,
+    TNode<Int32T> result_offsets_vector_length) {
+  auto f = ExternalConstant(ExternalReference::re_wtf8_dot_exec_raw());
   auto isolate_ptr = ExternalConstant(ExternalReference::isolate_address());
   auto result = UncheckedCast<IntPtrT>(CallCFunction(
       f, MachineType::IntPtr(),
