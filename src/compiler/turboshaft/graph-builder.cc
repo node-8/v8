@@ -1922,8 +1922,11 @@ OpIndex GraphBuilder::Process(
     case IrOpcode::kStringCodePointAt:
       // This simplified op is produced by the JavaScript call reducer. Wasm
       // emits StringCodePointAt directly and retains its existing semantics.
-      return __ StringWtf8CodePointAt(Map(node->InputAt(0)),
-                                      Map(node->InputAt(1)));
+      if (v8_flags.utf8_string_semantics) {
+        return __ StringWtf8CodePointAt(Map(node->InputAt(0)),
+                                        Map(node->InputAt(1)));
+      }
+      return __ StringCodePointAt(Map(node->InputAt(0)), Map(node->InputAt(1)));
 
 #ifdef V8_INTL_SUPPORT
     case IrOpcode::kStringToLowerCaseIntl:

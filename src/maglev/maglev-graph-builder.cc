@@ -9688,9 +9688,56 @@ MaybeReduceResult MaglevGraphBuilder::TryReduceStringPrototypeCharCodeAt(
 
 MaybeReduceResult MaglevGraphBuilder::TryReduceStringPrototypeCodePointAt(
     compiler::JSFunctionRef target, CallArguments& args) {
-  // Keep JavaScript calls on the shared WTF-8 runtime path until Maglev has a
-  // portable byte decoder.
-  return {};
+  if (v8_flags.utf8_string_semantics) {
+    // Keep node-8 calls on the shared WTF-8 runtime path until Maglev has a
+    // portable byte decoder.
+    return {};
+  }
+  if (!CanSpeculateCall({SpeculationMode::kDisallowBoundsCheckSpeculation})) {
+    return {};
+  }
+  ValueNode* receiver = GetValueOrUndefined(args.receiver());
+  ValueNode* index;
+  if (args.count() == 0) {
+    index = GetInt32Constant(0);
+  } else {
+    GET_VALUE_OR_ABORT(index, GetInt32ElementIndex(args[0]));
+  }
+  RETURN_IF_ABORT(BuildCheckString(receiver));
+  ValueNode* length;
+  GET_VALUE_OR_ABORT(length, BuildLoadStringLength(receiver));
+
+  auto GetCodePointAt = [&]() -> ReduceResult {
+    bool is_seq_one_byte =
+        v8_flags.specialize_code_for_one_byte_seq_strings &&
+        NodeTypeIs(GetType(receiver), NodeType::kSeqOneByteString);
+    if (is_seq_one_byte) {
+      return AddNewNode<BuiltinSeqOneByteStringCharCodeAt>({receiver, index});
+    }
+    return AddNewNode<BuiltinStringPrototypeCharCodeOrCodePointAt>(
+        {receiver, index},
+        BuiltinStringPrototypeCharCodeOrCodePointAt::kCodePointAt);
+  };
+
+  if (current_speculation_mode_ ==
+      SpeculationMode::kDisallowBoundsCheckSpeculation) {
+    return Select(
+        [&](BranchBuilder& builder) {
+          return BuildBranchIfUint32Compare(
+              builder, Operation::kLessThan,
+              AddNewNodeNoInputConversion<UnsafeInt32ToUint32>({index}),
+              AddNewNodeNoInputConversion<UnsafeInt32ToUint32>({length}));
+        },
+        [&]() -> ReduceResult { return GetCodePointAt(); },
+        [&]() -> ReduceResult {
+          return GetRootConstant(RootIndex::kUndefinedValue);
+        });
+  }
+
+  RETURN_IF_ABORT(TryBuildCheckInt32Condition(
+      index, length, AssertCondition::kUnsignedLessThan,
+      DeoptimizeReason::kOutOfBounds));
+  return GetCodePointAt();
 }
 
 MaybeReduceResult MaglevGraphBuilder::TryReduceStringPrototypeSlice(

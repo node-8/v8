@@ -317,7 +317,7 @@ RUNTIME_FUNCTION(Runtime_StringCodePointAt) {
   DisallowGarbageCollection no_gc;
   String::FlatContent content = subject->GetFlatContent(no_gc);
   DCHECK(content.IsFlat());
-  if (content.IsOneByte()) {
+  if (v8_flags.utf8_string_semantics && content.IsOneByte()) {
     Wtf8ByteCursor::Result result = content.DecodeWtf8At(
         i, Wtf8ByteCursor::Policy::kInternalWtf8);
     return Smi::FromInt(result.code_point);
