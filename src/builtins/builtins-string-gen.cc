@@ -1061,85 +1061,32 @@ TF_BUILTIN(StringFromCharCode, StringBuiltinsAssembler) {
     // string on the fly otherwise.
     TNode<Object> code = arguments.AtIndex(0);
     TNode<Word32T> code32 = TruncateTaggedToWord32(context, code);
-    TNode<Int32T> code16 =
-        Signed(Word32And(code32, Int32Constant(String::kMaxUtf16CodeUnit)));
-    TNode<String> result = StringFromSingleCharCode(code16);
+    TNode<Int32T> code8 =
+        Signed(Word32And(code32, Int32Constant(String::kMaxOneByteCharCode)));
+    TNode<String> result = StringFromSingleCharCode(code8);
     arguments.PopAndReturn(result);
   }
 
-  TNode<Word32T> code16;
   BIND(&if_notoneargument);
   {
-    Label two_byte(this);
-    // Assume that the resulting string contains only one-byte characters.
     TNode<String> one_byte_result = AllocateSeqOneByteString(unsigned_argc);
 
     TVARIABLE(IntPtrT, var_max_index, IntPtrConstant(0));
 
-    // Iterate over the incoming arguments, converting them to 8-bit character
-    // codes. Stop if any of the conversions generates a code that doesn't fit
-    // in 8 bits.
     CodeStubAssembler::VariableList vars({&var_max_index}, zone());
     arguments.ForEach(vars, [&](TNode<Object> arg) {
       TNode<Word32T> code32 = TruncateTaggedToWord32(context, arg);
-      code16 = Word32And(code32, Int32Constant(String::kMaxUtf16CodeUnit));
+      TNode<Word32T> code8 =
+          Word32And(code32, Int32Constant(String::kMaxOneByteCharCode));
 
-      GotoIf(
-          Int32GreaterThan(code16, Int32Constant(String::kMaxOneByteCharCode)),
-          &two_byte);
-
-      // The {code16} fits into the SeqOneByteString {one_byte_result}.
       TNode<IntPtrT> offset = ElementOffsetFromIndex(
           var_max_index.value(), UINT8_ELEMENTS,
           OFFSET_OF_DATA_START(SeqOneByteString) - kHeapObjectTag);
       StoreNoWriteBarrier(MachineRepresentation::kWord8, one_byte_result,
-                          offset, code16);
+                          offset, code8);
       var_max_index = IntPtrAdd(var_max_index.value(), IntPtrConstant(1));
     });
     arguments.PopAndReturn(one_byte_result);
-
-    BIND(&two_byte);
-
-    // At least one of the characters in the string requires a 16-bit
-    // representation.  Allocate a SeqTwoByteString to hold the resulting
-    // string.
-    TNode<String> two_byte_result = AllocateSeqTwoByteString(unsigned_argc);
-
-    // Copy the characters that have already been put in the 8-bit string into
-    // their corresponding positions in the new 16-bit string.
-    TNode<IntPtrT> zero = IntPtrConstant(0);
-    CopyStringCharacters(one_byte_result, two_byte_result, zero, zero,
-                         var_max_index.value(), String::ONE_BYTE_ENCODING,
-                         String::TWO_BYTE_ENCODING);
-
-    // Write the character that caused the 8-bit to 16-bit fault.
-    TNode<IntPtrT> max_index_offset = ElementOffsetFromIndex(
-        var_max_index.value(), UINT16_ELEMENTS,
-        OFFSET_OF_DATA_START(SeqTwoByteString) - kHeapObjectTag);
-    StoreNoWriteBarrier(MachineRepresentation::kWord16, two_byte_result,
-                        max_index_offset, code16);
-    var_max_index = IntPtrAdd(var_max_index.value(), IntPtrConstant(1));
-
-    // Resume copying the passed-in arguments from the same place where the
-    // 8-bit copy stopped, but this time copying over all of the characters
-    // using a 16-bit representation.
-    arguments.ForEach(
-        vars,
-        [&](TNode<Object> arg) {
-          TNode<Word32T> code32 = TruncateTaggedToWord32(context, arg);
-          TNode<Word32T> code16 =
-              Word32And(code32, Int32Constant(String::kMaxUtf16CodeUnit));
-
-          TNode<IntPtrT> offset = ElementOffsetFromIndex(
-              var_max_index.value(), UINT16_ELEMENTS,
-              OFFSET_OF_DATA_START(SeqTwoByteString) - kHeapObjectTag);
-          StoreNoWriteBarrier(MachineRepresentation::kWord16, two_byte_result,
-                              offset, code16);
-          var_max_index = IntPtrAdd(var_max_index.value(), IntPtrConstant(1));
-        },
-        var_max_index.value());
-
-    arguments.PopAndReturn(two_byte_result);
   }
 }
 

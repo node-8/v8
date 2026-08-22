@@ -49,63 +49,22 @@ TS_BUILTIN(StringFromCharCode, StringBuiltinsAssemblerTS) {
     // string on the fly otherwise.
     V<Object> code = arguments.AtIndex(0);
     V<Word32> code32 = TruncateTaggedToWord32(context, code);
-    V<Word32> code16 = Word32BitwiseAnd(code32, String::kMaxUtf16CodeUnit);
-    V<String> result = StringFromSingleCharCode(code16);
+    V<Word32> code8 = Word32BitwiseAnd(code32, String::kMaxOneByteCharCode);
+    V<String> result = StringFromSingleCharCode(code8);
     PopAndReturn(arguments, result);
   } ELSE {
-    Label<> contains_two_byte_characters(this);
-
-    // Assume that the resulting string contains only one-byte characters.
     V<SeqOneByteString> one_byte_result =
         AllocateSeqOneByteString(character_count);
 
     ScopedVar<WordPtr> var_max_index(this, 0);
-    // Iterate over the incoming arguments, converting them to 8-bit character
-    // codes. Stop if any of the conversions generates a code that doesn't fit
-    // in 8 bits.
     FOREACH(arg, arguments.Range()) {
       V<Word32> code32 = TruncateTaggedToWord32(context, arg);
-      V<Word32> code16 = Word32BitwiseAnd(code32, String::kMaxUtf16CodeUnit);
+      V<Word32> code8 =
+          Word32BitwiseAnd(code32, String::kMaxOneByteCharCode);
 
-      IF (UNLIKELY(Int32LessThan(String::kMaxOneByteCharCode, code16))) {
-        // At least one of the characters in the string requires a 16-bit
-        // representation.  Allocate a SeqTwoByteString to hold the resulting
-        // string.
-        V<SeqTwoByteString> two_byte_result =
-            AllocateSeqTwoByteString(character_count);
-
-        // Copy the characters that have already been put in the 8-bit string
-        // into their corresponding positions in the new 16-bit string.
-        CopyStringCharacters(one_byte_result, 0, String::ONE_BYTE_ENCODING,
-                             two_byte_result, 0, String::TWO_BYTE_ENCODING,
-                             var_max_index);
-
-        // Write the character that caused the 8-bit to 16-bit fault.
-        StoreElement(two_byte_result,
-                     AccessBuilderTS::ForSeqTwoByteStringCharacter(),
-                     var_max_index, code16);
-        var_max_index = WordPtrAdd(var_max_index, 1);
-
-        // Resume copying the passed-in arguments from the same place where the
-        // 8-bit copy stopped, but this time copying over all of the characters
-        // using a 16-bit representation.
-        FOREACH(rem_arg, arguments.Range(var_max_index)) {
-          V<Word32> rem_code32 = TruncateTaggedToWord32(context, rem_arg);
-          V<Word32> rem_code16 =
-              Word32BitwiseAnd(rem_code32, String::kMaxUtf16CodeUnit);
-
-          StoreElement(two_byte_result,
-                       AccessBuilderTS::ForSeqTwoByteStringCharacter(),
-                       var_max_index, rem_code16);
-          var_max_index = WordPtrAdd(var_max_index, 1);
-        }
-        PopAndReturn(arguments, two_byte_result);
-      }
-
-      // The {code16} fits into the SeqOneByteString {one_byte_result}.
       StoreElement(one_byte_result,
                    AccessBuilderTS::ForSeqOneByteStringCharacter(),
-                   var_max_index, code16);
+                   var_max_index, code8);
       var_max_index = WordPtrAdd(var_max_index, 1);
     }
     PopAndReturn(arguments, one_byte_result);

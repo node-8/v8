@@ -65,63 +65,25 @@ BUILTIN(StringFromCodePoint) {
   if (length == 0) return ReadOnlyRoots(isolate).empty_string();
   DCHECK_LT(0, length);
 
-  // Optimistically assume that the resulting String contains only one byte
-  // characters.
-  std::vector<uint8_t> one_byte_buffer;
-  one_byte_buffer.reserve(length);
-  base::uc32 code = 0;
-  int index;
-  for (index = 0; index < length; index++) {
-    code = NextCodePoint(isolate, args, index);
+  std::vector<uint8_t> byte_buffer;
+  byte_buffer.reserve(length);
+  for (int index = 0; index < length; index++) {
+    base::uc32 code = NextCodePoint(isolate, args, index);
     if (code == kInvalidCodePoint) {
       return ReadOnlyRoots(isolate).exception();
     }
-    if (code > String::kMaxOneByteCharCode) {
-      break;
-    }
-    one_byte_buffer.push_back(code);
-  }
-
-  if (index == length) {
-    RETURN_RESULT_OR_FAILURE(
-        isolate, isolate->factory()->NewStringFromOneByte(base::Vector<uint8_t>(
-                     one_byte_buffer.data(), one_byte_buffer.size())));
-  }
-
-  std::vector<base::uc16> two_byte_buffer;
-  two_byte_buffer.reserve(length - index);
-
-  while (true) {
-    if (code <=
-        static_cast<base::uc32>(unibrow::Utf16::kMaxNonSurrogateCharCode)) {
-      two_byte_buffer.push_back(code);
-    } else {
-      two_byte_buffer.push_back(unibrow::Utf16::LeadSurrogate(code));
-      two_byte_buffer.push_back(unibrow::Utf16::TrailSurrogate(code));
-    }
-
-    if (++index == length) {
-      break;
-    }
-    code = NextCodePoint(isolate, args, index);
-    if (code == kInvalidCodePoint) {
-      return ReadOnlyRoots(isolate).exception();
+    uint8_t encoded[unibrow::Utf8::kMaxEncodedSize];
+    unsigned encoded_length = unibrow::Utf8::Encode(
+        reinterpret_cast<char*>(encoded), code,
+        unibrow::Utf16::kNoPreviousCharacter, false);
+    for (unsigned offset = 0; offset < encoded_length; offset++) {
+      byte_buffer.push_back(encoded[offset]);
     }
   }
 
-  DirectHandle<SeqTwoByteString> result;
-  ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
-      isolate, result,
-      isolate->factory()->NewRawTwoByteString(
-          static_cast<int>(one_byte_buffer.size() + two_byte_buffer.size())));
-
-  DisallowGarbageCollection no_gc;
-  CopyChars(result->GetChars(no_gc), one_byte_buffer.data(),
-            one_byte_buffer.size());
-  CopyChars(result->GetChars(no_gc) + one_byte_buffer.size(),
-            two_byte_buffer.data(), two_byte_buffer.size());
-
-  return *result;
+  RETURN_RESULT_OR_FAILURE(
+      isolate, isolate->factory()->NewStringFromOneByte(base::Vector<uint8_t>(
+                   byte_buffer.data(), byte_buffer.size())));
 }
 
 // ES6 section 21.1.3.9
