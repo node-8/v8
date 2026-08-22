@@ -307,7 +307,8 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
                                    parse_result.capture_count);
     has_been_compiled = true;
   } else if (parse_result.simple && !IsIgnoreCase(flags) && !IsSticky(flags) &&
-             IsAsciiPattern(pattern) && !HasFewDifferentCharacters(pattern)) {
+             (!v8_flags.utf8_string_semantics || IsAsciiPattern(pattern)) &&
+             !HasFewDifferentCharacters(pattern)) {
     // Parse-tree is a single atom that is equal to the pattern.
     RegExpImpl::AtomCompile(isolate, re, pattern, flags, pattern);
     has_been_compiled = true;
@@ -318,9 +319,15 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
     // resolved in atom_string.
     base::Vector<const base::uc16> atom_pattern = atom->data();
     DirectHandle<String> atom_string;
-    ASSIGN_RETURN_ON_EXCEPTION(
-        isolate, atom_string,
-        NewWtf8AtomString(isolate, pattern, atom_pattern));
+    if (v8_flags.utf8_string_semantics) {
+      ASSIGN_RETURN_ON_EXCEPTION(
+          isolate, atom_string,
+          NewWtf8AtomString(isolate, pattern, atom_pattern));
+    } else {
+      ASSIGN_RETURN_ON_EXCEPTION(
+          isolate, atom_string,
+          isolate->factory()->NewStringFromTwoByte(atom_pattern));
+    }
     if (!IsIgnoreCase(flags) && !HasFewDifferentCharacters(atom_string)) {
       RegExpImpl::AtomCompile(isolate, re, pattern, flags, atom_string);
       has_been_compiled = true;
@@ -328,7 +335,8 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
   }
   if (!has_been_compiled) {
     const bool can_be_zero_length = parse_result.tree->min_match() == 0;
-    const bool is_wtf8_dot = pattern->length() == 1 && pattern->Get(0) == '.';
+    const bool is_wtf8_dot = v8_flags.utf8_string_semantics &&
+                             pattern->length() == 1 && pattern->Get(0) == '.';
     using Bits = IrRegExpData::Bits;
     const uint32_t bit_field =
         Bits::CanBeZeroLengthBit::encode(can_be_zero_length) |

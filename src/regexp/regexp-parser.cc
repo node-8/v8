@@ -5,6 +5,7 @@
 #include "src/regexp/regexp-parser.h"
 
 #include "src/execution/isolate.h"
+#include "src/flags/flags.h"
 #include "src/objects/string-inl.h"
 #include "src/regexp/regexp-ast-printer.h"
 #include "src/regexp/regexp-ast.h"
@@ -3303,32 +3304,34 @@ bool RegExpParser::ParseRegExpFromHeapString(Isolate* isolate, Zone* zone,
   String::FlatContent content = input->GetFlatContent(no_gc);
   if (content.IsOneByte()) {
     base::Vector<const uint8_t> v = content.ToOneByteVector();
-    bool is_ascii = true;
-    for (uint8_t byte : v) {
-      if (byte > unibrow::Utf8::kMaxOneByteChar) {
-        is_ascii = false;
-        break;
-      }
-    }
-    if (!is_ascii) {
-      ZoneVector<base::uc16> decoded(zone);
-      decoded.reserve(v.length());
-      Wtf8ByteCursor cursor(v, Wtf8ByteCursor::Policy::kInternalWtf8);
-      while (cursor.has_next()) {
-        size_t start = cursor.position();
-        Wtf8ByteCursor::Result next = cursor.DecodeNext();
-        if (next.status == Wtf8ByteCursor::Status::kReplaced) {
-          for (size_t i = start; i < cursor.position(); i++) {
-            decoded.push_back(v[i]);
-          }
-        } else {
-          push_code_unit(&decoded, next.code_point);
+    if (v8_flags.utf8_string_semantics) {
+      bool is_ascii = true;
+      for (uint8_t byte : v) {
+        if (byte > unibrow::Utf8::kMaxOneByteChar) {
+          is_ascii = false;
+          break;
         }
       }
-      return RegExpParserImpl<base::uc16>{
-          decoded.data(), static_cast<int>(decoded.size()), flags,
-          stack_limit,    zone,                             no_gc}
-          .Parse(result);
+      if (!is_ascii) {
+        ZoneVector<base::uc16> decoded(zone);
+        decoded.reserve(v.length());
+        Wtf8ByteCursor cursor(v, Wtf8ByteCursor::Policy::kInternalWtf8);
+        while (cursor.has_next()) {
+          size_t start = cursor.position();
+          Wtf8ByteCursor::Result next = cursor.DecodeNext();
+          if (next.status == Wtf8ByteCursor::Status::kReplaced) {
+            for (size_t i = start; i < cursor.position(); i++) {
+              decoded.push_back(v[i]);
+            }
+          } else {
+            push_code_unit(&decoded, next.code_point);
+          }
+        }
+        return RegExpParserImpl<base::uc16>{
+            decoded.data(), static_cast<int>(decoded.size()), flags,
+            stack_limit,    zone,                             no_gc}
+            .Parse(result);
+      }
     }
     return RegExpParserImpl<uint8_t>{v.begin(),   v.length(), flags,
                                      stack_limit, zone,       no_gc}
