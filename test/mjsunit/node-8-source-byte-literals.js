@@ -31,6 +31,8 @@ assertSame('é', 'é');
 // non-ASCII byte pattern once without creating a UTF-16 heap String.
 assertDoesNotThrow(() => new RegExp('\u00E9'));
 assertDoesNotThrow(() => new RegExp('[ªµºÀ-ÖØ-öø-ÿ]'));
+assertDoesNotThrow(
+    () => new RegExp('[\xAA\xB5\xBA\xC0-\xD6\u02C1]'));
 
 const subject = 'é中文Z';
 const needle = '中文';

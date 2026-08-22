@@ -3315,7 +3315,15 @@ bool RegExpParser::ParseRegExpFromHeapString(Isolate* isolate, Zone* zone,
       decoded.reserve(v.length());
       Wtf8ByteCursor cursor(v, Wtf8ByteCursor::Policy::kInternalWtf8);
       while (cursor.has_next()) {
-        push_code_unit(&decoded, cursor.DecodeNext().code_point);
+        size_t start = cursor.position();
+        Wtf8ByteCursor::Result next = cursor.DecodeNext();
+        if (next.status == Wtf8ByteCursor::Status::kReplaced) {
+          for (size_t i = start; i < cursor.position(); i++) {
+            decoded.push_back(v[i]);
+          }
+        } else {
+          push_code_unit(&decoded, next.code_point);
+        }
       }
       return RegExpParserImpl<base::uc16>{
           decoded.data(), static_cast<int>(decoded.size()), flags,
