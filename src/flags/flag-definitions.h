@@ -287,7 +287,7 @@ DEFINE_BOOL(harmony_shipping, true, "enable all shipped harmony features")
 DEFINE_BOOL(js_staging, false, "enable all completed JavaScript features")
 DEFINE_BOOL(js_shipping, true, "enable all shipped JavaScript features")
 
-DEFINE_BOOL(node_8_string_semantics, false,
+DEFINE_BOOL(utf8_string_semantics, false,
             "interpret JavaScript strings as UTF-8/WTF-8 byte sequences")
 
 // Update bootstrapper.cc whenever adding a new feature flag.

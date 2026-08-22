@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+// Flags: --utf8-string-semantics
+
 function byteValues(value) {
   return Array.from(
       {length: value.length}, (_, index) => value.charCodeAt(index));
