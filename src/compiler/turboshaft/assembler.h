@@ -4688,6 +4688,9 @@ class AssemblerOpInterface : public Next {
   V<Word32> StringCodePointAt(V<String> string, V<WordPtr> position) {
     return StringAt(string, position, StringAtOp::Kind::kCodePoint);
   }
+  V<Word32> StringWtf8CodePointAt(V<String> string, V<WordPtr> position) {
+    return StringAt(string, position, StringAtOp::Kind::kWtf8CodePoint);
+  }
 
 #ifdef V8_INTL_SUPPORT
   V<String> StringToCaseIntl(V<String> string,

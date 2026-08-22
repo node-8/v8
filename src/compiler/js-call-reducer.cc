@@ -7041,7 +7041,6 @@ Reduction JSCallReducer::ReduceStringPrototypeStringCodePointAt(Node* node) {
   index = effect = graph()->NewNode(simplified()->CheckBounds(p.feedback()),
                                     index, receiver_length, effect, control);
 
-  // Return the character from the {receiver} as single character string.
   Node* value = effect = graph()->NewNode(simplified()->StringCodePointAt(),
                                           receiver, index, effect, control);
 

@@ -314,7 +314,17 @@ RUNTIME_FUNCTION(Runtime_StringCodePointAt) {
     return ReadOnlyRoots(isolate).nan_value();
   }
 
-  int first_code_point = subject->Get(i);
+  DisallowGarbageCollection no_gc;
+  String::FlatContent content = subject->GetFlatContent(no_gc);
+  DCHECK(content.IsFlat());
+  if (content.IsOneByte()) {
+    Wtf8ByteCursor::Result result = content.DecodeWtf8At(
+        i, Wtf8ByteCursor::Policy::kInternalWtf8);
+    return Smi::FromInt(result.code_point);
+  }
+
+  // Temporary migration fallback for remaining two-byte string producers.
+  int first_code_point = content.Get(i);
   if ((first_code_point & 0xFC00) != 0xD800) {
     return Smi::FromInt(first_code_point);
   }
@@ -323,7 +333,7 @@ RUNTIME_FUNCTION(Runtime_StringCodePointAt) {
     return Smi::FromInt(first_code_point);
   }
 
-  int second_code_point = subject->Get(i + 1);
+  int second_code_point = content.Get(i + 1);
   if ((second_code_point & 0xFC00) != 0xDC00) {
     return Smi::FromInt(first_code_point);
   }

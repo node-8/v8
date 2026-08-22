@@ -9,6 +9,7 @@ namespace string {
 
 namespace runtime {
 extern transitioning runtime ToString(Context, JSAny): String;
+extern runtime StringCodePointAt(Context, String, Number): Number;
 }
 
 // LINT.IfChange
@@ -189,12 +190,9 @@ transitioning javascript builtin StringPrototypeCodePointAt(
   try {
     GenerateStringAt(receiver, position, 'String.prototype.codePointAt')
         otherwise IfInBounds, IfOutOfBounds;
-  } label IfInBounds(string: String, index: uintptr, length: uintptr) {
-    // This is always a call to a builtin from Javascript, so we need to
-    // produce UTF32.
-    const code: int32 = LoadSurrogatePairAt(
-        string, Signed(length), Signed(index), UnicodeEncoding::UTF32);
-    return Convert<Smi>(code);
+  } label IfInBounds(string: String, index: uintptr, _length: uintptr) {
+    return runtime::StringCodePointAt(
+        context, string, Convert<Number>(index));
   } label IfOutOfBounds {
     return Undefined;
   }

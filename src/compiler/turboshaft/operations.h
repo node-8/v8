@@ -5777,6 +5777,7 @@ struct StringAtOp : FixedArityOperationT<2, StringAtOp> {
   enum class Kind : uint8_t {
     kCharCode,
     kCodePoint,
+    kWtf8CodePoint,
   };
   Kind kind;
 

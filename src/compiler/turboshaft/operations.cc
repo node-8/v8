@@ -1601,6 +1601,8 @@ std::ostream& operator<<(std::ostream& os, StringAtOp::Kind kind) {
       return os << "CharCode";
     case StringAtOp::Kind::kCodePoint:
       return os << "CodePoint";
+    case StringAtOp::Kind::kWtf8CodePoint:
+      return os << "Wtf8CodePoint";
   }
 }
 

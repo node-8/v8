@@ -2598,9 +2598,12 @@ class MachineLoweringReducer : public Next {
 
       BIND(done, result);
       return result;
-    } else {
+    } else if (kind == StringAtOp::Kind::kCodePoint) {
       DCHECK_EQ(kind, StringAtOp::Kind::kCodePoint);
       return LoadSurrogatePairAt(string, {}, pos, UnicodeEncoding::UTF32);
+    } else {
+      DCHECK_EQ(kind, StringAtOp::Kind::kWtf8CodePoint);
+      return DecodeWtf8CodePointAt(string, pos);
     }
 
     UNREACHABLE();
@@ -4160,6 +4163,166 @@ class MachineLoweringReducer : public Next {
       GOTO(done, __ template LoadNonArrayBufferElement<Word32>(
                      receiver, AccessBuilder::ForSeqTwoByteStringCharacter(),
                      position));
+    }
+
+    BIND(done, result);
+    return result;
+  }
+
+  V<Word32> DecodeWtf8CodePointAt(V<String> string, V<WordPtr> position) {
+    Label<Word32> done(this);
+    Label<> runtime(this), decode(this), seq_string(this), cons_string(this),
+        sliced_string(this), thin_string(this), two_byte(this),
+        three_byte(this), four_byte(this);
+    LoopLabel<> loop(this);
+
+    V<WordPtr> logical_length = __ ChangeUint32ToUintPtr(
+        __ template LoadField<Word32>(string,
+                                      AccessBuilder::ForStringLength()));
+    ScopedVar<String> receiver(this, string);
+    ScopedVar<WordPtr> source_position(this, position);
+    GOTO(loop);
+
+    BIND_LOOP(loop) {
+      V<Word32> instance_type =
+          __ LoadInstanceTypeField(__ LoadMapField(receiver));
+      V<Word32> representation =
+          __ Word32BitwiseAnd(instance_type, kStringRepresentationMask);
+      GOTO_IF(__ Word32Equal(representation, kSeqStringTag), seq_string);
+      GOTO_IF(__ Word32Equal(representation, kConsStringTag), cons_string);
+      GOTO_IF(__ Word32Equal(representation, kSlicedStringTag), sliced_string);
+      GOTO_IF(__ Word32Equal(representation, kThinStringTag), thin_string);
+      GOTO(runtime);
+
+      if (BIND(seq_string)) {
+        V<Word32> encoding =
+            __ Word32BitwiseAnd(instance_type, kStringEncodingMask);
+        GOTO_IF(__ Word32Equal(encoding, kOneByteStringTag), decode);
+        GOTO(runtime);
+      }
+
+      if (BIND(cons_string)) {
+        V<String> second = __ template LoadField<String>(
+            receiver, AccessBuilder::ForConsStringSecond());
+        GOTO_IF_NOT(LIKELY(__ TaggedEqual(
+                        second, __ HeapConstant(factory_->empty_string()))),
+                    runtime);
+        receiver = __ template LoadField<String>(
+            receiver, AccessBuilder::ForConsStringFirst());
+        GOTO(loop);
+      }
+
+      if (BIND(sliced_string)) {
+        V<Smi> offset = __ template LoadField<Smi>(
+            receiver, AccessBuilder::ForSlicedStringOffset());
+        receiver = __ template LoadField<String>(
+            receiver, AccessBuilder::ForSlicedStringParent());
+        source_position = __ WordPtrAdd(
+            source_position, __ ChangeInt32ToIntPtr(__ UntagSmi(offset)));
+        GOTO(loop);
+      }
+
+      if (BIND(thin_string)) {
+        receiver = __ template LoadField<String>(
+            receiver, AccessBuilder::ForThinStringActual());
+        GOTO(loop);
+      }
+    }
+
+    BIND(decode);
+    V<String> direct_string = receiver;
+    V<WordPtr> direct_position = source_position;
+
+    auto load_byte = [&](V<WordPtr> index) {
+      return __ template LoadNonArrayBufferElement<Word32>(
+          direct_string, AccessBuilder::ForSeqOneByteStringCharacter(), index);
+    };
+    auto is_continuation = [&](V<Word32> value) {
+      return __ Word32Equal(__ Word32BitwiseAnd(value, 0xC0), 0x80);
+    };
+
+    constexpr uint32_t kBadChar = 0xFFFD;
+    V<Word32> first = load_byte(direct_position);
+    GOTO_IF(__ Uint32LessThanOrEqual(first, 0x7F), done, first);
+    GOTO_IF(__ Uint32LessThan(first, 0xC2), done,
+            __ Word32Constant(kBadChar));
+    GOTO_IF(__ Uint32LessThanOrEqual(first, 0xDF), two_byte);
+    GOTO_IF(__ Uint32LessThanOrEqual(first, 0xEF), three_byte);
+    GOTO_IF(__ Uint32LessThanOrEqual(first, 0xF4), four_byte);
+    GOTO(done, __ Word32Constant(kBadChar));
+
+    if (BIND(two_byte)) {
+      V<WordPtr> second_position = __ WordPtrAdd(position, 1);
+      GOTO_IF_NOT(__ UintPtrLessThan(second_position, logical_length), done,
+                  __ Word32Constant(kBadChar));
+      V<Word32> second = load_byte(__ WordPtrAdd(direct_position, 1));
+      GOTO_IF_NOT(is_continuation(second), done,
+                  __ Word32Constant(kBadChar));
+      GOTO(done,
+           __ Word32BitwiseOr(
+               __ Word32ShiftLeft(__ Word32BitwiseAnd(first, 0x1F), 6),
+               __ Word32BitwiseAnd(second, 0x3F)));
+    }
+
+    if (BIND(three_byte)) {
+      V<WordPtr> third_position = __ WordPtrAdd(position, 2);
+      GOTO_IF_NOT(__ UintPtrLessThan(third_position, logical_length), done,
+                  __ Word32Constant(kBadChar));
+      V<Word32> second = load_byte(__ WordPtrAdd(direct_position, 1));
+      V<Word32> second_valid = __ Word32BitwiseAnd(
+          is_continuation(second),
+          __ Word32BitwiseOr(__ Word32Equal(__ Word32Equal(first, 0xE0), 0),
+                             __ Uint32LessThanOrEqual(0xA0, second)));
+      GOTO_IF_NOT(second_valid, done, __ Word32Constant(kBadChar));
+      V<Word32> third = load_byte(__ WordPtrAdd(direct_position, 2));
+      GOTO_IF_NOT(is_continuation(third), done,
+                  __ Word32Constant(kBadChar));
+      GOTO(done,
+           __ Word32BitwiseOr(
+               __ Word32BitwiseOr(
+                   __ Word32ShiftLeft(__ Word32BitwiseAnd(first, 0x0F), 12),
+                   __ Word32ShiftLeft(__ Word32BitwiseAnd(second, 0x3F), 6)),
+               __ Word32BitwiseAnd(third, 0x3F)));
+    }
+
+    if (BIND(four_byte)) {
+      V<WordPtr> fourth_position = __ WordPtrAdd(position, 3);
+      GOTO_IF_NOT(__ UintPtrLessThan(fourth_position, logical_length), done,
+                  __ Word32Constant(kBadChar));
+      V<Word32> second = load_byte(__ WordPtrAdd(direct_position, 1));
+      V<Word32> second_valid = __ Word32BitwiseAnd(
+          is_continuation(second),
+          __ Word32BitwiseAnd(
+              __ Word32BitwiseOr(
+                  __ Word32Equal(__ Word32Equal(first, 0xF0), 0),
+                  __ Uint32LessThanOrEqual(0x90, second)),
+              __ Word32BitwiseOr(
+                  __ Word32Equal(__ Word32Equal(first, 0xF4), 0),
+                  __ Uint32LessThanOrEqual(second, 0x8F))));
+      GOTO_IF_NOT(second_valid, done, __ Word32Constant(kBadChar));
+      V<Word32> third = load_byte(__ WordPtrAdd(direct_position, 2));
+      V<Word32> fourth = load_byte(__ WordPtrAdd(direct_position, 3));
+      GOTO_IF_NOT(__ Word32BitwiseAnd(is_continuation(third),
+                                     is_continuation(fourth)),
+                  done, __ Word32Constant(kBadChar));
+      GOTO(done,
+           __ Word32BitwiseOr(
+               __ Word32BitwiseOr(
+                   __ Word32ShiftLeft(__ Word32BitwiseAnd(first, 0x07), 18),
+                   __ Word32ShiftLeft(__ Word32BitwiseAnd(second, 0x3F), 12)),
+               __ Word32BitwiseOr(
+                   __ Word32ShiftLeft(__ Word32BitwiseAnd(third, 0x3F), 6),
+                   __ Word32BitwiseAnd(fourth, 0x3F))));
+    }
+
+    if (BIND(runtime)) {
+      V<Word32> value = __ UntagSmi(
+          V<Smi>::Cast(__ template CallRuntime<runtime::StringCodePointAt>(
+              __ NoContextConstant(),
+              {.string = string,
+               .index = __ TagSmi(
+                   __ TruncateWordPtrToWord32(position))})));
+      GOTO(done, value);
     }
 
     BIND(done, result);

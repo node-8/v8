@@ -191,6 +191,19 @@ struct runtime : CallDescriptorBuilder {
         Operator::kNoDeopt | Operator::kNoThrow;
   };
 
+  struct StringCodePointAt : public Descriptor<StringCodePointAt> {
+    static constexpr auto kFunction = Runtime::kStringCodePointAt;
+    struct Arguments : ArgumentsBase {
+      ARG(V<String>, string)
+      ARG(V<Number>, index)
+    };
+    using returns_t = V<Smi>;
+
+    static constexpr bool kCanTriggerLazyDeopt = false;
+    static constexpr Operator::Properties kProperties =
+        Operator::kNoDeopt | Operator::kNoThrow;
+  };
+
 #ifdef V8_INTL_SUPPORT
   struct StringToUpperCaseIntl : public Descriptor<StringToUpperCaseIntl> {
     static constexpr auto kFunction = Runtime::kStringToUpperCaseIntl;

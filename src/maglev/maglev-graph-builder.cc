@@ -9688,64 +9688,9 @@ MaybeReduceResult MaglevGraphBuilder::TryReduceStringPrototypeCharCodeAt(
 
 MaybeReduceResult MaglevGraphBuilder::TryReduceStringPrototypeCodePointAt(
     compiler::JSFunctionRef target, CallArguments& args) {
-  if (!CanSpeculateCall({SpeculationMode::kDisallowBoundsCheckSpeculation})) {
-    return {};
-  }
-  ValueNode* receiver = GetValueOrUndefined(args.receiver());
-  ValueNode* index;
-  if (args.count() == 0) {
-    // Index is the undefined object. ToIntegerOrInfinity(undefined) = 0.
-    index = GetInt32Constant(0);
-  } else {
-    GET_VALUE_OR_ABORT(index, GetInt32ElementIndex(args[0]));
-  }
-  // Any other argument is ignored.
-  // Ensure that {receiver} is actually a String.
-  RETURN_IF_ABORT(BuildCheckString(receiver));
-  // And index is below length.
-  ValueNode* length;
-  GET_VALUE_OR_ABORT(length, BuildLoadStringLength(receiver));
-
-  auto GetCodePointAt = [&]() -> ReduceResult {
-    bool is_seq_one_byte =
-        v8_flags.specialize_code_for_one_byte_seq_strings &&
-        NodeTypeIs(GetType(receiver), NodeType::kSeqOneByteString);
-    if (is_seq_one_byte) {
-      // For one-byte strings, codePointAt == charCodeAt, since there are no
-      // surrogate pairs.
-      return AddNewNode<BuiltinSeqOneByteStringCharCodeAt>({receiver, index});
-    } else {
-      return AddNewNode<BuiltinStringPrototypeCharCodeOrCodePointAt>(
-          {receiver, index},
-          BuiltinStringPrototypeCharCodeOrCodePointAt::kCodePointAt);
-    }
-  };
-
-  if (current_speculation_mode_ ==
-      SpeculationMode::kDisallowBoundsCheckSpeculation) {
-    return Select(
-        [&](BranchBuilder& builder) {
-          // Do unsafe conversions of length and index into uint32, to do an
-          // unsigned comparison. The index might actually be a negative signed
-          // value, but this "unsafe" cast will still work, converting it into a
-          // large unsigned value which compares greater than the length.
-          return BuildBranchIfUint32Compare(
-              builder, Operation::kLessThan,
-              // 'index' and 'length' are both int32, so no input conversion is
-              // needed.
-              AddNewNodeNoInputConversion<UnsafeInt32ToUint32>({index}),
-              AddNewNodeNoInputConversion<UnsafeInt32ToUint32>({length}));
-        },
-        [&]() -> ReduceResult { return GetCodePointAt(); },
-        [&]() -> ReduceResult {
-          return GetRootConstant(RootIndex::kUndefinedValue);
-        });
-  }
-
-  RETURN_IF_ABORT(TryBuildCheckInt32Condition(
-      index, length, AssertCondition::kUnsignedLessThan,
-      DeoptimizeReason::kOutOfBounds));
-  return GetCodePointAt();
+  // Keep JavaScript calls on the shared WTF-8 runtime path until Maglev has a
+  // portable byte decoder.
+  return {};
 }
 
 MaybeReduceResult MaglevGraphBuilder::TryReduceStringPrototypeSlice(
