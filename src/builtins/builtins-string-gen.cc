@@ -1048,45 +1048,114 @@ TF_BUILTIN(StringFromCharCode, StringBuiltinsAssembler) {
   CodeStubArguments arguments(this, argc);
   TNode<Uint32T> unsigned_argc =
       Unsigned(TruncateIntPtrToInt32(arguments.GetLengthWithoutReceiver()));
-  // Check if we have exactly one argument (plus the implicit receiver), i.e.
-  // if the parent frame is not an inlined arguments frame.
-  Label if_oneargument(this), if_notoneargument(this);
-  Branch(IntPtrEqual(arguments.GetLengthWithoutReceiver(), IntPtrConstant(1)),
-         &if_oneargument, &if_notoneargument);
+  Label if_node8(this), if_stock(this);
+  Branch(LoadRuntimeFlag(
+             ExternalReference::address_of_utf8_string_semantics_flag()),
+         &if_node8, &if_stock);
 
-  BIND(&if_oneargument);
+  BIND(&if_stock);
   {
-    // Single argument case, perform fast single character string cache lookup
-    // for one-byte code units, or fall back to creating a single character
-    // string on the fly otherwise.
-    TNode<Object> code = arguments.AtIndex(0);
-    TNode<Word32T> code32 = TruncateTaggedToWord32(context, code);
-    TNode<Int32T> code8 =
-        Signed(Word32And(code32, Int32Constant(String::kMaxOneByteCharCode)));
-    TNode<String> result = StringFromSingleCharCode(code8);
-    arguments.PopAndReturn(result);
+    Label if_oneargument(this), if_notoneargument(this);
+    Branch(IntPtrEqual(arguments.GetLengthWithoutReceiver(), IntPtrConstant(1)),
+           &if_oneargument, &if_notoneargument);
+
+    BIND(&if_oneargument);
+    {
+      TNode<Object> code = arguments.AtIndex(0);
+      TNode<Word32T> code32 = TruncateTaggedToWord32(context, code);
+      TNode<Int32T> code16 =
+          Signed(Word32And(code32, Int32Constant(String::kMaxUtf16CodeUnit)));
+      arguments.PopAndReturn(StringFromSingleCharCode(code16));
+    }
+
+    TNode<Word32T> code16;
+    BIND(&if_notoneargument);
+    {
+      Label two_byte(this);
+      TNode<String> one_byte_result = AllocateSeqOneByteString(unsigned_argc);
+      TVARIABLE(IntPtrT, var_max_index, IntPtrConstant(0));
+      CodeStubAssembler::VariableList vars({&var_max_index}, zone());
+      arguments.ForEach(vars, [&](TNode<Object> arg) {
+        TNode<Word32T> code32 = TruncateTaggedToWord32(context, arg);
+        code16 = Word32And(code32, Int32Constant(String::kMaxUtf16CodeUnit));
+        GotoIf(Int32GreaterThan(code16,
+                                Int32Constant(String::kMaxOneByteCharCode)),
+               &two_byte);
+
+        TNode<IntPtrT> offset = ElementOffsetFromIndex(
+            var_max_index.value(), UINT8_ELEMENTS,
+            OFFSET_OF_DATA_START(SeqOneByteString) - kHeapObjectTag);
+        StoreNoWriteBarrier(MachineRepresentation::kWord8, one_byte_result,
+                            offset, code16);
+        var_max_index = IntPtrAdd(var_max_index.value(), IntPtrConstant(1));
+      });
+      arguments.PopAndReturn(one_byte_result);
+
+      BIND(&two_byte);
+      TNode<String> two_byte_result = AllocateSeqTwoByteString(unsigned_argc);
+      TNode<IntPtrT> zero = IntPtrConstant(0);
+      CopyStringCharacters(one_byte_result, two_byte_result, zero, zero,
+                           var_max_index.value(), String::ONE_BYTE_ENCODING,
+                           String::TWO_BYTE_ENCODING);
+
+      TNode<IntPtrT> max_index_offset = ElementOffsetFromIndex(
+          var_max_index.value(), UINT16_ELEMENTS,
+          OFFSET_OF_DATA_START(SeqTwoByteString) - kHeapObjectTag);
+      StoreNoWriteBarrier(MachineRepresentation::kWord16, two_byte_result,
+                          max_index_offset, code16);
+      var_max_index = IntPtrAdd(var_max_index.value(), IntPtrConstant(1));
+
+      arguments.ForEach(
+          vars,
+          [&](TNode<Object> arg) {
+            TNode<Word32T> code32 = TruncateTaggedToWord32(context, arg);
+            TNode<Word32T> remaining_code16 =
+                Word32And(code32, Int32Constant(String::kMaxUtf16CodeUnit));
+            TNode<IntPtrT> offset = ElementOffsetFromIndex(
+                var_max_index.value(), UINT16_ELEMENTS,
+                OFFSET_OF_DATA_START(SeqTwoByteString) - kHeapObjectTag);
+            StoreNoWriteBarrier(MachineRepresentation::kWord16, two_byte_result,
+                                offset, remaining_code16);
+            var_max_index = IntPtrAdd(var_max_index.value(), IntPtrConstant(1));
+          },
+          var_max_index.value());
+      arguments.PopAndReturn(two_byte_result);
+    }
   }
 
-  BIND(&if_notoneargument);
+  BIND(&if_node8);
   {
-    TNode<String> one_byte_result = AllocateSeqOneByteString(unsigned_argc);
+    Label if_oneargument(this), if_notoneargument(this);
+    Branch(IntPtrEqual(arguments.GetLengthWithoutReceiver(), IntPtrConstant(1)),
+           &if_oneargument, &if_notoneargument);
 
-    TVARIABLE(IntPtrT, var_max_index, IntPtrConstant(0));
+    BIND(&if_oneargument);
+    {
+      TNode<Object> code = arguments.AtIndex(0);
+      TNode<Word32T> code32 = TruncateTaggedToWord32(context, code);
+      TNode<Int32T> code8 =
+          Signed(Word32And(code32, Int32Constant(String::kMaxOneByteCharCode)));
+      arguments.PopAndReturn(StringFromSingleCharCode(code8));
+    }
 
-    CodeStubAssembler::VariableList vars({&var_max_index}, zone());
-    arguments.ForEach(vars, [&](TNode<Object> arg) {
-      TNode<Word32T> code32 = TruncateTaggedToWord32(context, arg);
-      TNode<Word32T> code8 =
-          Word32And(code32, Int32Constant(String::kMaxOneByteCharCode));
-
-      TNode<IntPtrT> offset = ElementOffsetFromIndex(
-          var_max_index.value(), UINT8_ELEMENTS,
-          OFFSET_OF_DATA_START(SeqOneByteString) - kHeapObjectTag);
-      StoreNoWriteBarrier(MachineRepresentation::kWord8, one_byte_result,
-                          offset, code8);
-      var_max_index = IntPtrAdd(var_max_index.value(), IntPtrConstant(1));
-    });
-    arguments.PopAndReturn(one_byte_result);
+    BIND(&if_notoneargument);
+    {
+      TNode<String> result = AllocateSeqOneByteString(unsigned_argc);
+      TVARIABLE(IntPtrT, index, IntPtrConstant(0));
+      CodeStubAssembler::VariableList vars({&index}, zone());
+      arguments.ForEach(vars, [&](TNode<Object> arg) {
+        TNode<Word32T> code32 = TruncateTaggedToWord32(context, arg);
+        TNode<Word32T> code8 =
+            Word32And(code32, Int32Constant(String::kMaxOneByteCharCode));
+        TNode<IntPtrT> offset = ElementOffsetFromIndex(
+            index.value(), UINT8_ELEMENTS,
+            OFFSET_OF_DATA_START(SeqOneByteString) - kHeapObjectTag);
+        StoreNoWriteBarrier(MachineRepresentation::kWord8, result, offset,
+                            code8);
+        index = IntPtrAdd(index.value(), IntPtrConstant(1));
+      });
+      arguments.PopAndReturn(result);
+    }
   }
 }
 

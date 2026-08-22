@@ -65,6 +65,59 @@ BUILTIN(StringFromCodePoint) {
   if (length == 0) return ReadOnlyRoots(isolate).empty_string();
   DCHECK_LT(0, length);
 
+  if (!v8_flags.utf8_string_semantics) {
+    std::vector<uint8_t> one_byte_buffer;
+    one_byte_buffer.reserve(length);
+    base::uc32 code = 0;
+    int index;
+    for (index = 0; index < length; index++) {
+      code = NextCodePoint(isolate, args, index);
+      if (code == kInvalidCodePoint) {
+        return ReadOnlyRoots(isolate).exception();
+      }
+      if (code > String::kMaxOneByteCharCode) break;
+      one_byte_buffer.push_back(code);
+    }
+
+    if (index == length) {
+      RETURN_RESULT_OR_FAILURE(
+          isolate,
+          isolate->factory()->NewStringFromOneByte(base::Vector<uint8_t>(
+              one_byte_buffer.data(), one_byte_buffer.size())));
+    }
+
+    std::vector<base::uc16> two_byte_buffer;
+    two_byte_buffer.reserve(length - index);
+    while (true) {
+      if (code <=
+          static_cast<base::uc32>(unibrow::Utf16::kMaxNonSurrogateCharCode)) {
+        two_byte_buffer.push_back(code);
+      } else {
+        two_byte_buffer.push_back(unibrow::Utf16::LeadSurrogate(code));
+        two_byte_buffer.push_back(unibrow::Utf16::TrailSurrogate(code));
+      }
+
+      if (++index == length) break;
+      code = NextCodePoint(isolate, args, index);
+      if (code == kInvalidCodePoint) {
+        return ReadOnlyRoots(isolate).exception();
+      }
+    }
+
+    DirectHandle<SeqTwoByteString> result;
+    ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
+        isolate, result,
+        isolate->factory()->NewRawTwoByteString(
+            static_cast<int>(one_byte_buffer.size() + two_byte_buffer.size())));
+
+    DisallowGarbageCollection no_gc;
+    CopyChars(result->GetChars(no_gc), one_byte_buffer.data(),
+              one_byte_buffer.size());
+    CopyChars(result->GetChars(no_gc) + one_byte_buffer.size(),
+              two_byte_buffer.data(), two_byte_buffer.size());
+    return *result;
+  }
+
   std::vector<uint8_t> byte_buffer;
   byte_buffer.reserve(length);
   for (int index = 0; index < length; index++) {

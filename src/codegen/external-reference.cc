@@ -889,6 +889,10 @@ ExternalReference ExternalReference::address_of_shared_string_table_flag() {
   return ExternalReference(&v8_flags.shared_string_table);
 }
 
+ExternalReference ExternalReference::address_of_utf8_string_semantics_flag() {
+  return ExternalReference(&v8_flags.utf8_string_semantics);
+}
+
 ExternalReference
 ExternalReference::address_of_track_array_buffer_views_flag() {
   return ExternalReference(&v8_flags.track_array_buffer_views);

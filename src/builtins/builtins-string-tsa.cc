@@ -41,33 +41,72 @@ TS_BUILTIN(StringFromCharCode, StringBuiltinsAssemblerTS) {
   BuiltinArgumentsTS arguments(this, argc);
 
   V<WordPtr> character_count = arguments.GetLengthWithoutReceiver();
-  // Check if we have exactly one argument (plus the implicit receiver), i.e.
-  // if the parent frame is not an inlined arguments frame.
-  IF (WordPtrEqual(arguments.GetLengthWithoutReceiver(), 1)) {
-    // Single argument case, perform fast single character string cache lookup
-    // for one-byte code units, or fall back to creating a single character
-    // string on the fly otherwise.
-    V<Object> code = arguments.AtIndex(0);
-    V<Word32> code32 = TruncateTaggedToWord32(context, code);
-    V<Word32> code8 = Word32BitwiseAnd(code32, String::kMaxOneByteCharCode);
-    V<String> result = StringFromSingleCharCode(code8);
-    PopAndReturn(arguments, result);
-  } ELSE {
-    V<SeqOneByteString> one_byte_result =
-        AllocateSeqOneByteString(character_count);
+  V<Word32> flag = LoadOffHeap(
+      ExternalConstant(
+          ExternalReference::address_of_utf8_string_semantics_flag()),
+      MemoryRepresentation::Uint8());
+  IF (Word32Equal(flag, 0)) {
+    IF (WordPtrEqual(arguments.GetLengthWithoutReceiver(), 1)) {
+      V<Object> code = arguments.AtIndex(0);
+      V<Word32> code32 = TruncateTaggedToWord32(context, code);
+      V<Word32> code16 = Word32BitwiseAnd(code32, String::kMaxUtf16CodeUnit);
+      PopAndReturn(arguments, StringFromSingleCharCode(code16));
+    } ELSE {
+      Label<> contains_two_byte_characters(this);
+      V<SeqOneByteString> one_byte_result =
+          AllocateSeqOneByteString(character_count);
+      ScopedVar<WordPtr> index(this, 0);
+      FOREACH(arg, arguments.Range()) {
+        V<Word32> code32 = TruncateTaggedToWord32(context, arg);
+        V<Word32> code16 = Word32BitwiseAnd(code32, String::kMaxUtf16CodeUnit);
+        IF (UNLIKELY(Int32LessThan(String::kMaxOneByteCharCode, code16))) {
+          V<SeqTwoByteString> two_byte_result =
+              AllocateSeqTwoByteString(character_count);
+          CopyStringCharacters(one_byte_result, 0, String::ONE_BYTE_ENCODING,
+                               two_byte_result, 0, String::TWO_BYTE_ENCODING,
+                               index);
+          StoreElement(two_byte_result,
+                       AccessBuilderTS::ForSeqTwoByteStringCharacter(), index,
+                       code16);
+          index = WordPtrAdd(index, 1);
 
-    ScopedVar<WordPtr> var_max_index(this, 0);
-    FOREACH(arg, arguments.Range()) {
-      V<Word32> code32 = TruncateTaggedToWord32(context, arg);
-      V<Word32> code8 =
-          Word32BitwiseAnd(code32, String::kMaxOneByteCharCode);
+          FOREACH(rem_arg, arguments.Range(index)) {
+            V<Word32> rem_code32 = TruncateTaggedToWord32(context, rem_arg);
+            V<Word32> rem_code16 =
+                Word32BitwiseAnd(rem_code32, String::kMaxUtf16CodeUnit);
+            StoreElement(two_byte_result,
+                         AccessBuilderTS::ForSeqTwoByteStringCharacter(), index,
+                         rem_code16);
+            index = WordPtrAdd(index, 1);
+          }
+          PopAndReturn(arguments, two_byte_result);
+        }
 
-      StoreElement(one_byte_result,
-                   AccessBuilderTS::ForSeqOneByteStringCharacter(),
-                   var_max_index, code8);
-      var_max_index = WordPtrAdd(var_max_index, 1);
+        StoreElement(one_byte_result,
+                     AccessBuilderTS::ForSeqOneByteStringCharacter(), index,
+                     code16);
+        index = WordPtrAdd(index, 1);
+      }
+      PopAndReturn(arguments, one_byte_result);
     }
-    PopAndReturn(arguments, one_byte_result);
+  } ELSE {
+    IF (WordPtrEqual(arguments.GetLengthWithoutReceiver(), 1)) {
+      V<Object> code = arguments.AtIndex(0);
+      V<Word32> code32 = TruncateTaggedToWord32(context, code);
+      V<Word32> code8 = Word32BitwiseAnd(code32, String::kMaxOneByteCharCode);
+      PopAndReturn(arguments, StringFromSingleCharCode(code8));
+    } ELSE {
+      V<SeqOneByteString> result = AllocateSeqOneByteString(character_count);
+      ScopedVar<WordPtr> index(this, 0);
+      FOREACH(arg, arguments.Range()) {
+        V<Word32> code32 = TruncateTaggedToWord32(context, arg);
+        V<Word32> code8 = Word32BitwiseAnd(code32, String::kMaxOneByteCharCode);
+        StoreElement(result, AccessBuilderTS::ForSeqOneByteStringCharacter(),
+                     index, code8);
+        index = WordPtrAdd(index, 1);
+      }
+      PopAndReturn(arguments, result);
+    }
   }
 }
 
