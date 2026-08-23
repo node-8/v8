@@ -240,6 +240,21 @@ MaybeDirectHandle<String> NewWtf8AtomString(
       base::Vector<const uint8_t>(bytes.data(), encoded.bytes_written));
 }
 
+std::optional<base::Vector<const base::uc16>> GetLiteralAtomPattern(
+    RegExpTree* tree, ZoneVector<base::uc16>* scratch) {
+  if (tree->IsAtom()) return tree->AsAtom()->data();
+  DCHECK(tree->IsText());
+
+  ZoneList<TextElement>* elements = tree->AsText()->elements();
+  for (int i = 0; i < elements->length(); i++) {
+    TextElement element = elements->at(i);
+    if (element.text_type() != TextElement::ATOM) return std::nullopt;
+    base::Vector<const base::uc16> atom = element.atom()->data();
+    scratch->insert(scratch->end(), atom.begin(), atom.end());
+  }
+  return base::Vector<const base::uc16>(scratch->data(), scratch->size());
+}
+
 }  // namespace
 
 // Generic RegExp methods. Dispatches to implementation specific methods.
@@ -312,25 +327,30 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
     // Parse-tree is a single atom that is equal to the pattern.
     RegExpImpl::AtomCompile(isolate, re, pattern, flags, pattern);
     has_been_compiled = true;
-  } else if (parse_result.tree->IsAtom() && !IsSticky(flags) &&
-             parse_result.capture_count == 0) {
-    RegExpAtom* atom = parse_result.tree->AsAtom();
+  } else if ((parse_result.tree->IsAtom() ||
+              (v8_flags.utf8_string_semantics &&
+               parse_result.tree->IsText())) &&
+             !IsSticky(flags) && parse_result.capture_count == 0) {
     // The pattern source might (?) contain escape sequences, but they're
     // resolved in atom_string.
-    base::Vector<const base::uc16> atom_pattern = atom->data();
-    DirectHandle<String> atom_string;
-    if (v8_flags.utf8_string_semantics) {
-      ASSIGN_RETURN_ON_EXCEPTION(
-          isolate, atom_string,
-          NewWtf8AtomString(isolate, pattern, atom_pattern));
-    } else {
-      ASSIGN_RETURN_ON_EXCEPTION(
-          isolate, atom_string,
-          isolate->factory()->NewStringFromTwoByte(atom_pattern));
-    }
-    if (!IsIgnoreCase(flags) && !HasFewDifferentCharacters(atom_string)) {
-      RegExpImpl::AtomCompile(isolate, re, pattern, flags, atom_string);
-      has_been_compiled = true;
+    ZoneVector<base::uc16> compound_atom(&zone);
+    std::optional<base::Vector<const base::uc16>> atom_pattern =
+        GetLiteralAtomPattern(parse_result.tree, &compound_atom);
+    if (atom_pattern.has_value()) {
+      DirectHandle<String> atom_string;
+      if (v8_flags.utf8_string_semantics) {
+        ASSIGN_RETURN_ON_EXCEPTION(
+            isolate, atom_string,
+            NewWtf8AtomString(isolate, pattern, atom_pattern.value()));
+      } else {
+        ASSIGN_RETURN_ON_EXCEPTION(
+            isolate, atom_string,
+            isolate->factory()->NewStringFromTwoByte(atom_pattern.value()));
+      }
+      if (!IsIgnoreCase(flags) && !HasFewDifferentCharacters(atom_string)) {
+        RegExpImpl::AtomCompile(isolate, re, pattern, flags, atom_string);
+        has_been_compiled = true;
+      }
     }
   }
   if (!has_been_compiled) {
