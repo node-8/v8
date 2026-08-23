@@ -27,7 +27,6 @@
 #include "src/objects/smi.h"
 #include "src/objects/tagged.h"
 #include "src/strings/string-builder-inl.h"
-#include "src/strings/unicode.h"
 
 namespace v8 {
 namespace internal {
@@ -539,6 +538,12 @@ constexpr bool NeedsEscape(uint32_t input) {
   const uint32_t result = ((has_lt_0x20 | has_0x22 | has_0x5c) & result_mask);
   return result != 0;
 }
+
+constexpr bool ContainsByte(uint32_t input, uint8_t byte) {
+  const uint32_t repeated = static_cast<uint32_t>(byte) * 0x01010101u;
+  const uint32_t value = input ^ repeated;
+  return ((value - 0x01010101u) & ~value & 0x80808080u) != 0;
+}
 // LINT.ThenChange(/src/objects/string.cc:StringDoesNotContainEscapeCharacters)
 
 template <typename SrcChar>
@@ -566,38 +571,11 @@ bool SerializeNode8JsonString(base::Vector<const uint8_t> bytes, size_t start,
                               AppendCString append_c_string) {
   bool required_escaping = false;
   size_t index = start;
-  if (unibrow::Utf8::ValidateEncoding(bytes.begin(), bytes.size())) {
-    while (index < bytes.size()) {
-      if (index + sizeof(uint32_t) <= bytes.size()) {
-        uint32_t packed;
-        std::memcpy(&packed, bytes.begin() + index, sizeof(packed));
-        if (!NeedsEscape(packed)) {
-          index += sizeof(packed);
-          continue;
-        }
-      }
-
-      uint8_t byte = bytes[index];
-      if (DoNotEscape(byte)) {
-        index++;
-        continue;
-      }
-      required_escaping = true;
-      append_bytes(bytes.begin() + uncopied_src_index,
-                   index - uncopied_src_index);
-      append_c_string(&JsonEscapeTable[byte * kJsonEscapeTableEntrySize]);
-      uncopied_src_index = ++index;
-    }
-    append_bytes(bytes.begin() + uncopied_src_index,
-                 bytes.size() - uncopied_src_index);
-    return required_escaping;
-  }
-
   while (index < bytes.size()) {
     if (index + sizeof(uint32_t) <= bytes.size()) {
       uint32_t packed;
       std::memcpy(&packed, bytes.begin() + index, sizeof(packed));
-      if (!NeedsEscape(packed) && (packed & 0x80808080u) == 0) {
+      if (!NeedsEscape(packed) && !ContainsByte(packed, 0xED)) {
         index += sizeof(packed);
         continue;
       }
@@ -617,78 +595,30 @@ bool SerializeNode8JsonString(base::Vector<const uint8_t> bytes, size_t start,
       continue;
     }
 
-    unibrow::uchar code_point = 0;
-    size_t sequence_length = 1;
-    bool valid = false;
-    if (byte >= 0xC2 && byte <= 0xDF) {
-      if (index + 1 < bytes.size() && (bytes[index + 1] & 0xC0) == 0x80) {
-        code_point = ((byte & 0x1F) << 6) | (bytes[index + 1] & 0x3F);
-        sequence_length = 2;
-        valid = true;
-      }
-    } else if (byte >= 0xE0 && byte <= 0xEF) {
-      if (index + 1 < bytes.size()) {
-        uint8_t second = bytes[index + 1];
-        bool valid_second = byte == 0xE0 ? second >= 0xA0 && second <= 0xBF
-                                         : (second & 0xC0) == 0x80;
-        if (valid_second) {
-          sequence_length = 2;
-          if (index + 2 < bytes.size() && (bytes[index + 2] & 0xC0) == 0x80) {
-            code_point = ((byte & 0x0F) << 12) | ((second & 0x3F) << 6) |
-                         (bytes[index + 2] & 0x3F);
-            sequence_length = 3;
-            valid = true;
-          }
-        }
-      }
-    } else if (byte >= 0xF0 && byte <= 0xF4) {
-      if (index + 1 < bytes.size()) {
-        uint8_t second = bytes[index + 1];
-        bool valid_second = byte == 0xF0   ? second >= 0x90 && second <= 0xBF
-                            : byte == 0xF4 ? second >= 0x80 && second <= 0x8F
-                                           : (second & 0xC0) == 0x80;
-        if (valid_second) {
-          sequence_length = 2;
-          if (index + 2 < bytes.size() && (bytes[index + 2] & 0xC0) == 0x80) {
-            sequence_length = 3;
-            if (index + 3 < bytes.size() && (bytes[index + 3] & 0xC0) == 0x80) {
-              code_point = ((byte & 0x07) << 18) | ((second & 0x3F) << 12) |
-                           ((bytes[index + 2] & 0x3F) << 6) |
-                           (bytes[index + 3] & 0x3F);
-              sequence_length = 4;
-              valid = true;
-            }
-          }
-        }
-      }
-    }
-
-    bool is_surrogate =
-        valid &&
-        base::IsInRange(code_point, static_cast<unibrow::uchar>(0xD800),
-                        static_cast<unibrow::uchar>(0xDFFF));
-    if (valid && !is_surrogate) {
-      index += sequence_length;
+    if (byte != 0xED || index + 2 >= bytes.size() ||
+        !base::IsInRange(bytes[index + 1], static_cast<uint8_t>(0xA0),
+                         static_cast<uint8_t>(0xBF)) ||
+        (bytes[index + 2] & 0xC0) != 0x80) {
+      index++;
       continue;
     }
 
     required_escaping = true;
     append_bytes(bytes.begin() + uncopied_src_index,
                  index - uncopied_src_index);
-    if (is_surrogate) {
-      static constexpr char kHex[] = "0123456789abcdef";
-      char escaped[7] = {'\\',
-                         'u',
-                         kHex[(code_point >> 12) & 0xF],
-                         kHex[(code_point >> 8) & 0xF],
-                         kHex[(code_point >> 4) & 0xF],
-                         kHex[code_point & 0xF],
-                         '\0'};
-      append_c_string(escaped);
-    } else {
-      append_c_string("\xEF\xBF\xBD");
-    }
-    index += sequence_length;
+    unibrow::uchar surrogate = ((byte & 0x0F) << 12) |
+                               ((bytes[index + 1] & 0x3F) << 6) |
+                               (bytes[index + 2] & 0x3F);
+    static constexpr char kHex[] = "0123456789abcdef";
+    char escaped[7] = {'\\',
+                       'u',
+                       kHex[(surrogate >> 12) & 0xF],
+                       kHex[(surrogate >> 8) & 0xF],
+                       kHex[(surrogate >> 4) & 0xF],
+                       kHex[surrogate & 0xF],
+                       '\0'};
+    append_c_string(escaped);
+    index += 3;
     uncopied_src_index = index;
   }
   append_bytes(bytes.begin() + uncopied_src_index,
@@ -3563,7 +3493,7 @@ bool FastJsonStringifier<Char>::AppendStringSWAR(
   for (; i + (stride - 1) < length; i += stride) {
     PackedT packed = *reinterpret_cast<const PackedT*>(chars + i);
     if (V8_UNLIKELY(NeedsEscape(packed) || (v8_flags.utf8_string_semantics &&
-                                            (packed & 0x80808080u) != 0))) {
+                                            ContainsByte(packed, 0xED)))) {
       break;
     }
   }
@@ -3588,7 +3518,7 @@ bool FastJsonStringifier<Char>::AppendStringSIMD(
   const auto mask_0x20 = hw::Set(tag, 0x20);
   const auto mask_0x22 = hw::Set(tag, 0x22);
   const auto mask_0x5c = hw::Set(tag, 0x5c);
-  const auto mask_0x80 = hw::Set(tag, 0x80);
+  const auto mask_0xed = hw::Set(tag, 0xed);
 
   for (; block + (stride - 1) < end; block += stride) {
     const auto input = hw::LoadU(tag, block);
@@ -3599,8 +3529,7 @@ bool FastJsonStringifier<Char>::AppendStringSIMD(
     const auto has_0x5c = hw::Eq(input, mask_0x5c);
     auto result = hw::Or(hw::Or(has_lower_than_0x20, has_0x22), has_0x5c);
     if (v8_flags.utf8_string_semantics) {
-      const auto has_high_bit = hw::Eq(hw::And(input, mask_0x80), mask_0x80);
-      result = hw::Or(result, has_high_bit);
+      result = hw::Or(result, hw::Eq(input, mask_0xed));
     }
 
     // No character that needs escaping found in block.
@@ -3610,7 +3539,7 @@ bool FastJsonStringifier<Char>::AppendStringSIMD(
     Char found_char = block[index];
     const size_t char_index = block - chars + index;
     if (v8_flags.utf8_string_semantics &&
-        (static_cast<uint8_t>(found_char) & 0x80) != 0) {
+        static_cast<uint8_t>(found_char) == 0xed) {
       return AppendStringScalar(chars, length, char_index, uncopied_src_index,
                                 no_gc) ||
              needs_escaping;
