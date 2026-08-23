@@ -3292,6 +3292,23 @@ bool RegExpBuilder::AddQuantifierToAtom(
 template class RegExpParserImpl<uint8_t>;
 template class RegExpParserImpl<base::uc16>;
 
+void DecodeNode8RegExpBytes(base::Vector<const uint8_t> bytes,
+                            ZoneVector<base::uc16>* decoded) {
+  decoded->reserve(bytes.length());
+  Wtf8ByteCursor cursor(bytes, Wtf8ByteCursor::Policy::kInternalWtf8);
+  while (cursor.has_next()) {
+    size_t start = cursor.position();
+    Wtf8ByteCursor::Result next = cursor.DecodeNext();
+    if (next.status == Wtf8ByteCursor::Status::kReplaced) {
+      for (size_t i = start; i < cursor.position(); i++) {
+        decoded->push_back(bytes[i]);
+      }
+    } else {
+      push_code_unit(decoded, next.code_point);
+    }
+  }
+}
+
 }  // namespace
 
 // static
@@ -3304,34 +3321,15 @@ bool RegExpParser::ParseRegExpFromHeapString(Isolate* isolate, Zone* zone,
   String::FlatContent content = input->GetFlatContent(no_gc);
   if (content.IsOneByte()) {
     base::Vector<const uint8_t> v = content.ToOneByteVector();
-    if (v8_flags.utf8_string_semantics) {
-      bool is_ascii = true;
-      for (uint8_t byte : v) {
-        if (byte > unibrow::Utf8::kMaxOneByteChar) {
-          is_ascii = false;
-          break;
-        }
-      }
-      if (!is_ascii) {
-        ZoneVector<base::uc16> decoded(zone);
-        decoded.reserve(v.length());
-        Wtf8ByteCursor cursor(v, Wtf8ByteCursor::Policy::kInternalWtf8);
-        while (cursor.has_next()) {
-          size_t start = cursor.position();
-          Wtf8ByteCursor::Result next = cursor.DecodeNext();
-          if (next.status == Wtf8ByteCursor::Status::kReplaced) {
-            for (size_t i = start; i < cursor.position(); i++) {
-              decoded.push_back(v[i]);
-            }
-          } else {
-            push_code_unit(&decoded, next.code_point);
-          }
-        }
-        return RegExpParserImpl<base::uc16>{
-            decoded.data(), static_cast<int>(decoded.size()), flags,
-            stack_limit,    zone,                             no_gc}
-            .Parse(result);
-      }
+    if (v8_flags.utf8_string_semantics &&
+        NonAsciiStart(v.begin(), v.length()) <
+            static_cast<uint32_t>(v.length())) {
+      ZoneVector<base::uc16> decoded(zone);
+      DecodeNode8RegExpBytes(v, &decoded);
+      return RegExpParserImpl<base::uc16>{
+          decoded.data(), static_cast<int>(decoded.size()), flags,
+          stack_limit,    zone,                             no_gc}
+          .Parse(result);
     }
     return RegExpParserImpl<uint8_t>{v.begin(),   v.length(), flags,
                                      stack_limit, zone,       no_gc}
@@ -3351,6 +3349,20 @@ bool RegExpParser::VerifyRegExpSyntax(Zone* zone, uintptr_t stack_limit,
                                       RegExpFlags flags,
                                       RegExpCompileData* result,
                                       const DisallowGarbageCollection& no_gc) {
+  if constexpr (sizeof(CharT) == sizeof(uint8_t)) {
+    const uint8_t* bytes = reinterpret_cast<const uint8_t*>(input);
+    if (v8_flags.utf8_string_semantics &&
+        NonAsciiStart(bytes, input_length) <
+            static_cast<uint32_t>(input_length)) {
+      ZoneVector<base::uc16> decoded(zone);
+      DecodeNode8RegExpBytes(
+          base::Vector<const uint8_t>(bytes, input_length), &decoded);
+      return RegExpParserImpl<base::uc16>{
+          decoded.data(), static_cast<int>(decoded.size()), flags,
+          stack_limit,    zone,                             no_gc}
+          .Parse(result);
+    }
+  }
   return RegExpParserImpl<CharT>{input,       input_length, flags,
                                  stack_limit, zone,         no_gc}
       .Parse(result);

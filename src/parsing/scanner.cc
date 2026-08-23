@@ -1120,7 +1120,7 @@ bool Scanner::ScanRegExpPattern() {
   // Scan regular expression body: According to ECMA-262, 3rd, 7.8.5,
   // the scanner should pass uninterpreted bodies to the RegExp
   // constructor.
-  next().literal_chars.Start();
+  next().literal_chars.StartByteString(v8_flags.utf8_string_semantics);
   if (next().token == Token::kAssignDiv) {
     AddLiteralChar('=');
   }
