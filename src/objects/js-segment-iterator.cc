@@ -20,39 +20,124 @@
 #include "src/objects/managed-inl.h"
 #include "src/objects/objects-inl.h"
 #include "unicode/brkiter.h"
+#include "unicode/uvernum.h"
 
 namespace v8 {
 namespace internal {
 
 static_assert(String::kMaxLength <= JSSegmentIterator::NextIndexBits::kMax);
+static_assert(U_ICU_VERSION_MAJOR_NUM == 77 || U_ICU_VERSION_MAJOR_NUM == 78,
+              "Revalidate the Node-8 grapheme byte ranges for this ICU");
 
 namespace {
 
-constexpr size_t kMinAsciiGraphemeFastPathBytes = 8;
+bool IsContinuationByte(uint8_t byte) { return (byte & 0xc0) == 0x80; }
 
-bool HasLongAsciiPrefix(const std::string& bytes) {
-  if (bytes.size() < kMinAsciiGraphemeFastPathBytes) return false;
-  for (size_t i = 0; i < kMinAsciiGraphemeFastPathBytes; ++i) {
-    if (static_cast<uint8_t>(bytes[i]) >= 0x80) return false;
-  }
-  return true;
+bool HasBytes(const std::string& bytes, size_t index, size_t count) {
+  return count <= bytes.size() - index;
 }
 
-int32_t FastAsciiGraphemeEnd(const std::string& bytes, int32_t start) {
+size_t CommonIndependentSequenceEnd(const std::string& bytes, size_t index) {
+  // These UTF-8 ranges have Grapheme_Cluster_Break=Other in ICU 77 and 78.
+  // C1 controls and U+00AD are deliberately excluded because GB4 takes
+  // precedence over the rules that attach Extend characters.
+  DCHECK_LT(index, bytes.size());
+  const uint8_t first = static_cast<uint8_t>(bytes[index]);
+
+  if (HasBytes(bytes, index, 2)) {
+    const uint8_t second = static_cast<uint8_t>(bytes[index + 1]);
+    if ((first == 0xc2 && second >= 0xa0 && second != 0xad) ||
+        (first >= 0xc3 && first <= 0xcb && IsContinuationByte(second)) ||
+        ((first == 0xd0 || first == 0xd1) && IsContinuationByte(second)) ||
+        (first == 0xd2 && second >= 0x80 && second <= 0x82)) {
+      return index + 2;
+    }
+  }
+  if (HasBytes(bytes, index, 3)) {
+    const uint8_t second = static_cast<uint8_t>(bytes[index + 1]);
+    const uint8_t third = static_cast<uint8_t>(bytes[index + 2]);
+    if ((first == 0xe2 && second == 0x80 && third >= 0x90 && third <= 0xa7) ||
+        (first == 0xe3 && second >= 0x90 && second <= 0xbf &&
+         IsContinuationByte(third)) ||
+        (first >= 0xe4 && first <= 0xe9 && IsContinuationByte(second) &&
+         IsContinuationByte(third))) {
+      return index + 3;
+    }
+  }
+  if (first == 0xf0 && HasBytes(bytes, index, 4)) {
+    const uint8_t second = static_cast<uint8_t>(bytes[index + 1]);
+    const uint8_t third = static_cast<uint8_t>(bytes[index + 2]);
+    const uint8_t fourth = static_cast<uint8_t>(bytes[index + 3]);
+    if (second == 0x9f && IsContinuationByte(fourth) &&
+        ((third >= 0x8c && third <= 0x8e) ||
+         (third == 0x8f && fourth <= 0xba) ||
+         (third >= 0x90 && third <= 0xab))) {
+      return index + 4;
+    }
+  }
+  return 0;
+}
+
+size_t CommonExtendSequenceEnd(const std::string& bytes, size_t index) {
+  // U+0300..U+036F, U+FE00..U+FE0F, and U+1F3FB..U+1F3FF all have
+  // Grapheme_Cluster_Break=Extend in ICU 77 and 78.
+  DCHECK_LT(index, bytes.size());
+  const uint8_t first = static_cast<uint8_t>(bytes[index]);
+  if (HasBytes(bytes, index, 2)) {
+    const uint8_t second = static_cast<uint8_t>(bytes[index + 1]);
+    if ((first == 0xcc && IsContinuationByte(second)) ||
+        (first == 0xcd && second >= 0x80 && second <= 0xaf)) {
+      return index + 2;
+    }
+  }
+  if (first == 0xef && HasBytes(bytes, index, 3) &&
+      static_cast<uint8_t>(bytes[index + 1]) == 0xb8) {
+    const uint8_t third = static_cast<uint8_t>(bytes[index + 2]);
+    if (third >= 0x80 && third <= 0x8f) {
+      return index + 3;
+    }
+  }
+  if (first == 0xf0 && HasBytes(bytes, index, 4) &&
+      static_cast<uint8_t>(bytes[index + 1]) == 0x9f &&
+      static_cast<uint8_t>(bytes[index + 2]) == 0x8f) {
+    const uint8_t fourth = static_cast<uint8_t>(bytes[index + 3]);
+    if (fourth >= 0xbb && fourth <= 0xbf) {
+      return index + 4;
+    }
+  }
+  return 0;
+}
+
+int32_t FastCommonGraphemeEnd(const std::string& bytes, int32_t start) {
   DCHECK_GE(start, 0);
   DCHECK_LT(start, bytes.size());
   const size_t index = static_cast<size_t>(start);
   const uint8_t current = static_cast<uint8_t>(bytes[index]);
-  if (current >= 0x80) return icu::BreakIterator::DONE;
+  size_t next_index;
 
-  const size_t next_index = index + 1;
-  if (current == '\r' && next_index < bytes.size() &&
-      bytes[next_index] == '\n') {
-    return start + 2;
+  if (current < 0x80) {
+    next_index = index + 1;
+    if (current == '\r' && next_index < bytes.size() &&
+        bytes[next_index] == '\n') {
+      return start + 2;
+    }
+    if (current <= 0x1f || current == 0x7f) {
+      return start + 1;
+    }
+  } else {
+    next_index = CommonIndependentSequenceEnd(bytes, index);
+    if (next_index == 0) return icu::BreakIterator::DONE;
   }
-  if (current <= 0x1f || current == 0x7f || next_index == bytes.size() ||
-      static_cast<uint8_t>(bytes[next_index]) < 0x80) {
-    return start + 1;
+
+  while (next_index < bytes.size()) {
+    size_t extend_end = CommonExtendSequenceEnd(bytes, next_index);
+    if (extend_end == 0) break;
+    next_index = extend_end;
+  }
+  if (next_index == bytes.size() ||
+      static_cast<uint8_t>(bytes[next_index]) < 0x80 ||
+      CommonIndependentSequenceEnd(bytes, next_index) != 0) {
+    return static_cast<int32_t>(next_index);
   }
   return icu::BreakIterator::DONE;
 }
@@ -138,18 +223,18 @@ MaybeDirectHandle<JSReceiver> JSSegmentIterator::Next(
     bool fast_path_active = fast_start_index != 0;
     start_index = fast_path_active ? static_cast<int32_t>(fast_start_index)
                                    : icu_break_iterator->current();
-    if (!fast_path_active && start_index == 0) {
-      fast_path_active = HasLongAsciiPrefix(text->utf8());
-    }
-    if (!fast_path_active) {
-      end_index = icu_break_iterator->next();
-    } else if (start_index == text->length()) {
+    if (start_index == icu::BreakIterator::DONE ||
+        start_index == text->length()) {
       end_index = icu::BreakIterator::DONE;
     } else {
-      end_index = FastAsciiGraphemeEnd(text->utf8(), start_index);
+      end_index = FastCommonGraphemeEnd(text->utf8(), start_index);
       if (end_index == icu::BreakIterator::DONE) {
-        end_index = icu_break_iterator->following(start_index);
-        segment_iterator->set_next_index(0);
+        if (fast_path_active) {
+          end_index = icu_break_iterator->following(start_index);
+          segment_iterator->set_next_index(0);
+        } else {
+          end_index = icu_break_iterator->next();
+        }
       } else {
         segment_iterator->set_next_index(end_index);
       }

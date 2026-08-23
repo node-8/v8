@@ -88,6 +88,40 @@ assertEquals(
     asciiFastPathSegments.map(({index}) => index));
 assertContainingMatchesIteration(graphemeSegmenter, asciiFastPathInput);
 
+const independentRangeEndpoints = [
+  0x00a0,
+  0x00ac,
+  0x00ae,
+  0x02ff,
+  0x0400,
+  0x0482,
+  0x2010,
+  0x2027,
+  0x3400,
+  0x9fff,
+  0x1f300,
+  0x1f3fa,
+  0x1f400,
+  0x1faff,
+];
+for (const codePoint of independentRangeEndpoints) {
+  const input = String.fromCodePoint(codePoint) + '\u0301';
+  assertEquals(1, Array.from(graphemeSegmenter.segment(input)).length);
+  assertContainingMatchesIteration(graphemeSegmenter, input);
+}
+
+for (const codePoint of [0x0080, 0x009f, 0x00ad]) {
+  const input = String.fromCodePoint(codePoint) + '\u0301';
+  assertEquals(2, Array.from(graphemeSegmenter.segment(input)).length);
+  assertContainingMatchesIteration(graphemeSegmenter, input);
+}
+
+for (const codePoint of [0x0300, 0x036f, 0xfe00, 0xfe0f, 0x1f3fb, 0x1f3ff]) {
+  const input = 'A' + String.fromCodePoint(codePoint);
+  assertEquals(1, Array.from(graphemeSegmenter.segment(input)).length);
+  assertContainingMatchesIteration(graphemeSegmenter, input);
+}
+
 for (const granularity of ['word', 'sentence']) {
   const input = 'café 世界. Déjà vu!';
   const segments =
