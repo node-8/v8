@@ -5,6 +5,7 @@
 #include "src/objects/value-serializer.h"
 
 #include <type_traits>
+#include <vector>
 
 #include "include/v8-maybe.h"
 #include "include/v8-value-serializer-version.h"
@@ -565,7 +566,9 @@ void ValueSerializer::WriteString(DirectHandle<String> string) {
   DCHECK(flat.IsFlat());
   if (flat.IsOneByte()) {
     base::Vector<const uint8_t> chars = flat.ToOneByteVector();
-    WriteTag(SerializationTag::kOneByteString);
+    // Node-8 byte strings are UTF-8/WTF-8 data, not Latin-1 code points.
+    WriteTag(v8_flags.utf8_string_semantics ? SerializationTag::kUtf8String
+                                            : SerializationTag::kOneByteString);
     WriteOneByteString(chars);
   } else if (flat.IsTwoByte()) {
     base::Vector<const base::uc16> chars = flat.ToUC16Vector();
@@ -1813,6 +1816,10 @@ MaybeDirectHandle<String> ValueDeserializer::ReadUtf8String(
   // utf8_length is checked in ReadRawBytes.
   base::Vector<const uint8_t> utf8_bytes;
   if (!ReadRawBytes(utf8_length).To(&utf8_bytes)) return {};
+  if (v8_flags.utf8_string_semantics) {
+    // Preserve the serialized bytes without validation or transcoding.
+    return isolate_->factory()->NewStringFromOneByte(utf8_bytes, allocation);
+  }
   return isolate_->factory()->NewStringFromUtf8(
       base::Vector<const char>::cast(utf8_bytes), allocation);
 }
@@ -1824,6 +1831,10 @@ MaybeDirectHandle<String> ValueDeserializer::ReadOneByteString(
   if (!ReadVarint<uint32_t>().To(&byte_length)) return {};
   // byte_length is checked in ReadRawBytes.
   if (!ReadRawBytes(byte_length).To(&bytes)) return {};
+  if (v8_flags.utf8_string_semantics) {
+    // This tag denotes Latin-1 in the existing wire format.
+    return isolate_->factory()->NewStringFromLatin1(bytes, allocation);
+  }
   return isolate_->factory()->NewStringFromOneByte(bytes, allocation);
 }
 
@@ -1841,6 +1852,13 @@ MaybeDirectHandle<String> ValueDeserializer::ReadTwoByteString(
   // Allocate an uninitialized string so that we can do a raw memcpy into the
   // string on the heap (regardless of alignment).
   if (byte_length == 0) return isolate_->factory()->empty_string();
+  if (v8_flags.utf8_string_semantics) {
+    // Convert legacy host-endian UTF-16 only at this wire-format boundary.
+    std::vector<base::uc16> code_units(byte_length / sizeof(base::uc16));
+    memcpy(code_units.data(), bytes.begin(), byte_length);
+    return isolate_->factory()->NewStringFromTwoByte(base::VectorOf(code_units),
+                                                     allocation);
+  }
   DirectHandle<SeqTwoByteString> string;
   if (!isolate_->factory()
            ->NewRawTwoByteString(byte_length / sizeof(base::uc16), allocation)
