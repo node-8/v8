@@ -30,8 +30,8 @@ TQ_OBJECT_CONSTRUCTORS_IMPL(JSSegmentDataObjectWithIsWordLike)
 ACCESSORS(JSSegmentIterator, icu_break_iterator,
           Tagged<Managed<icu::BreakIterator>>, kIcuBreakIteratorOffset)
 ACCESSORS(JSSegmentIterator, raw_string, Tagged<String>, kRawStringOffset)
-ACCESSORS(JSSegmentIterator, unicode_string,
-          Tagged<Managed<icu::UnicodeString>>, kUnicodeStringOffset)
+ACCESSORS(JSSegmentIterator, break_iterator_text,
+          Tagged<Managed<BreakIteratorText>>, kBreakIteratorTextOffset)
 
 inline void JSSegmentIterator::set_granularity(
     JSSegmenter::Granularity granularity) {

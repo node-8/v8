@@ -20,10 +20,36 @@
 #include "src/objects/js-segments-inl.h"
 #include "src/objects/managed-inl.h"
 #include "src/objects/objects-inl.h"
+#include "src/strings/unicode-decoder.h"
 #include "unicode/brkiter.h"
 
 namespace v8 {
 namespace internal {
+
+namespace {
+
+int32_t AlignToWtf8CodePointStart(const std::string& bytes, int32_t index) {
+  DCHECK_GE(index, 0);
+  DCHECK_LT(index, bytes.size());
+  base::Vector<const uint8_t> input(
+      reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size());
+  size_t byte_index = static_cast<size_t>(index);
+  size_t first_candidate = byte_index > 3 ? byte_index - 3 : 0;
+  int32_t aligned_index = index;
+
+  for (size_t candidate = byte_index;; --candidate) {
+    Wtf8ByteCursor cursor(input, Wtf8ByteCursor::Policy::kInternalWtf8,
+                          candidate);
+    Wtf8ByteCursor::Result result = cursor.DecodeNext();
+    if (candidate + result.byte_length > byte_index) {
+      aligned_index = static_cast<int32_t>(candidate);
+    }
+    if (candidate == first_candidate) break;
+  }
+  return aligned_index;
+}
+
+}  // namespace
 
 // ecma402 #sec-createsegmentsobject
 MaybeDirectHandle<JSSegments> JSSegments::Create(
@@ -33,8 +59,9 @@ MaybeDirectHandle<JSSegments> JSSegments::Create(
       segmenter->icu_break_iterator()->raw()->clone()};
   DCHECK_NOT_NULL(break_iterator);
 
-  DirectHandle<Managed<icu::UnicodeString>> unicode_string =
-      Intl::SetTextToBreakIterator(isolate, string, break_iterator.get());
+  DirectHandle<Managed<BreakIteratorText>> break_iterator_text =
+      Intl::SetTextToBreakIteratorForSegments(isolate, string,
+                                              break_iterator.get());
   DirectHandle<Managed<icu::BreakIterator>> managed_break_iterator =
       Managed<icu::BreakIterator>::From(isolate, 0, std::move(break_iterator));
 
@@ -53,7 +80,7 @@ MaybeDirectHandle<JSSegments> JSSegments::Create(
 
   // 4. Set segments.[[SegmentsString]] to string.
   segments->set_raw_string(*string);
-  segments->set_unicode_string(*unicode_string);
+  segments->set_break_iterator_text(*break_iterator_text);
 
   // 5. Return segments.
   return segments;
@@ -63,7 +90,8 @@ MaybeDirectHandle<JSSegments> JSSegments::Create(
 MaybeDirectHandle<Object> JSSegments::Containing(
     Isolate* isolate, DirectHandle<JSSegments> segments, double n_double) {
   // 5. Let len be the length of string.
-  int32_t len = segments->unicode_string()->raw()->length();
+  BreakIteratorText* text = segments->break_iterator_text()->raw();
+  int32_t len = text->length();
 
   // 7. If n < 0 or n ≥ len, return undefined.
   if (n_double < 0 || n_double >= len) {
@@ -71,8 +99,14 @@ MaybeDirectHandle<Object> JSSegments::Containing(
   }
 
   int32_t n = static_cast<int32_t>(n_double);
-  // n may point to the surrogate tail- adjust it back to the lead.
-  n = segments->unicode_string()->raw()->getChar32Start(n);
+  // In stock mode n may point to the surrogate tail. In Node-8 mode align a
+  // byte within a UTF-8/WTF-8 or malformed subpart before asking ICU for the
+  // surrounding grapheme boundary.
+  if (text->is_utf8()) {
+    n = AlignToWtf8CodePointStart(text->utf8(), n);
+  } else {
+    n = text->unicode().getChar32Start(n);
+  }
 
   icu::BreakIterator* break_iterator = segments->icu_break_iterator()->raw();
   // 8. Let startIndex be ! FindBoundary(segmenter, string, n, before).
@@ -84,10 +118,10 @@ MaybeDirectHandle<Object> JSSegments::Containing(
 
   // 10. Return ! CreateSegmentDataObject(segmenter, string, startIndex,
   // endIndex).
-  return CreateSegmentDataObject(
-      isolate, segments->granularity(), break_iterator,
-      direct_handle(segments->raw_string(), isolate),
-      *(segments->unicode_string()->raw()), start_index, end_index);
+  return CreateSegmentDataObject(isolate, segments->granularity(),
+                                 break_iterator,
+                                 direct_handle(segments->raw_string(), isolate),
+                                 *text, start_index, end_index);
 }
 
 namespace {
@@ -109,7 +143,7 @@ bool CurrentSegmentIsWordLike(icu::BreakIterator* break_iterator) {
 MaybeDirectHandle<JSSegmentDataObject> JSSegments::CreateSegmentDataObject(
     Isolate* isolate, JSSegmenter::Granularity granularity,
     icu::BreakIterator* break_iterator, DirectHandle<String> input_string,
-    const icu::UnicodeString& unicode_string, int32_t start_index,
+    const BreakIteratorText& break_iterator_text, int32_t start_index,
     int32_t end_index) {
   Factory* factory = isolate->factory();
 
@@ -117,7 +151,7 @@ MaybeDirectHandle<JSSegmentDataObject> JSSegments::CreateSegmentDataObject(
   // 2. Assert: startIndex ≥ 0.
   DCHECK_GE(start_index, 0);
   // 3. Assert: endIndex ≤ len.
-  DCHECK_LE(end_index, unicode_string.length());
+  DCHECK_LE(end_index, break_iterator_text.length());
   // 4. Assert: startIndex < endIndex.
   DCHECK_LT(start_index, end_index);
 
@@ -134,9 +168,15 @@ MaybeDirectHandle<JSSegmentDataObject> JSSegments::CreateSegmentDataObject(
   // consisting of the code units at indices startIndex (inclusive) through
   // endIndex (exclusive).
   DirectHandle<String> segment;
-  ASSIGN_RETURN_ON_EXCEPTION(
-      isolate, segment,
-      Intl::ToString(isolate, unicode_string, start_index, end_index));
+  if (break_iterator_text.is_utf8()) {
+    segment = isolate->factory()->NewProperSubString(input_string, start_index,
+                                                     end_index);
+  } else {
+    ASSIGN_RETURN_ON_EXCEPTION(
+        isolate, segment,
+        Intl::ToString(isolate, break_iterator_text.unicode(), start_index,
+                       end_index));
+  }
   DirectHandle<Number> index = factory->NewNumberFromInt(start_index);
 
   // 7. Perform ! CreateDataPropertyOrThrow(result, "segment", segment).

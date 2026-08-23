@@ -183,6 +183,21 @@ validate or call `toWellFormed()` at that boundary. This rule avoids an
 implicit full-string validation pass and preserves `parse`/`stringify` byte
 closure for ordinary malformed input.
 
+### `Intl.Segmenter` boundary
+
+`Intl.Segmenter` binds byte Strings to ICU through a UTF-8 `UText`; it must not
+materialize a UTF-16 String. Segment indexes are byte offsets, and each
+returned `segment` is the raw byte slice selected by adjacent ICU boundaries.
+The resulting `index`, `segment.length`, and String slicing operations must
+compose over the original input.
+
+`Segments.prototype.containing(i)` treats `i` as a byte position. If it falls
+inside a UTF-8/WTF-8 sequence or malformed subpart, the implementation may
+inspect at most the local four-byte window needed to select the same segment
+as iteration; it must not prevalidate the whole String. ICU sees a WTF-8
+surrogate as an equal-width replacement scalar in its private byte copy, while
+the observable segment remains the original WTF-8 bytes.
+
 ## 9. Runtime and embedding boundaries
 
 ### D14: Node output boundaries

@@ -28,6 +28,8 @@ class UnicodeString;
 namespace v8 {
 namespace internal {
 
+class BreakIteratorText;
+
 #include "torque-generated/src/objects/js-segments-tq.inc"
 
 class JSSegments : public TorqueGeneratedJSSegments<JSSegments, JSObject> {
@@ -47,7 +49,7 @@ class JSSegments : public TorqueGeneratedJSSegments<JSSegments, JSObject> {
                           JSSegmenter::Granularity granularity,
                           icu::BreakIterator* break_iterator,
                           DirectHandle<String> input_string,
-                          const icu::UnicodeString& unicode_string,
+                          const BreakIteratorText& break_iterator_text,
                           int32_t start_index, int32_t end_index);
 
   Handle<String> GranularityAsString(Isolate* isolate) const;
@@ -55,7 +57,7 @@ class JSSegments : public TorqueGeneratedJSSegments<JSSegments, JSObject> {
   // SegmentIterator accessors.
   DECL_ACCESSORS(icu_break_iterator, Tagged<Managed<icu::BreakIterator>>)
   DECL_ACCESSORS(raw_string, Tagged<String>)
-  DECL_ACCESSORS(unicode_string, Tagged<Managed<icu::UnicodeString>>)
+  DECL_ACCESSORS(break_iterator_text, Tagged<Managed<BreakIteratorText>>)
 
   DECL_PRINTER(JSSegments)
 

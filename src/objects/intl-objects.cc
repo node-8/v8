@@ -58,6 +58,7 @@
 #include "unicode/timezone.h"
 #include "unicode/ures.h"
 #include "unicode/ustring.h"
+#include "unicode/utext.h"
 #include "unicode/uvernum.h"  // U_ICU_VERSION_MAJOR_NUM
 #pragma GCC diagnostic pop
 
@@ -77,7 +78,44 @@ START_PROHIBIT_SIGN_CONVERSION()
 
 namespace v8::internal {
 
+BreakIteratorText::BreakIteratorText(std::string utf8)
+    : utf8_(std::move(utf8)) {}
+
+BreakIteratorText::BreakIteratorText(
+    std::unique_ptr<icu::UnicodeString> unicode)
+    : unicode_(std::move(unicode)) {}
+
+BreakIteratorText::~BreakIteratorText() = default;
+
+int32_t BreakIteratorText::length() const {
+  return is_utf8() ? static_cast<int32_t>(utf8_.size()) : unicode_->length();
+}
+
+const icu::UnicodeString& BreakIteratorText::unicode() const {
+  DCHECK(!is_utf8());
+  return *unicode_;
+}
+
 namespace {
+
+void ReplaceWtf8SurrogatesForIcuSegmentation(std::string* utf8) {
+  size_t position = 0;
+  while ((position = utf8->find(static_cast<char>(0xed), position)) !=
+         std::string::npos) {
+    if (position + 2 < utf8->size()) {
+      uint8_t second = static_cast<uint8_t>((*utf8)[position + 1]);
+      uint8_t third = static_cast<uint8_t>((*utf8)[position + 2]);
+      if ((second & 0xe0) == 0xa0 && (third & 0xc0) == 0x80) {
+        (*utf8)[position] = static_cast<char>(0xef);
+        (*utf8)[position + 1] = static_cast<char>(0xbf);
+        (*utf8)[position + 2] = static_cast<char>(0xbd);
+        position += 3;
+        continue;
+      }
+    }
+    ++position;
+  }
+}
 
 // Performs a SBXCHECK-ed conversion from V8 length to ICU length (int32_t).
 int32_t to_icu_length(uint32_t value) {
@@ -2939,6 +2977,42 @@ DirectHandle<Managed<icu::UnicodeString>> Intl::SetTextToBreakIterator(
 
   break_iterator->setText(*u_text);
   return new_u_text;
+}
+
+DirectHandle<Managed<BreakIteratorText>>
+Intl::SetTextToBreakIteratorForSegments(Isolate* isolate,
+                                        DirectHandle<String> text,
+                                        icu::BreakIterator* break_iterator) {
+  text = String::Flatten(isolate, text);
+  if (v8_flags.utf8_string_semantics &&
+      String::IsOneByteRepresentationUnderneath(*text)) {
+    std::string utf8;
+    {
+      DisallowGarbageCollection no_gc;
+      String::FlatContent content = text->GetFlatContent(no_gc);
+      base::Vector<const uint8_t> bytes = content.ToByteVector();
+      utf8.assign(reinterpret_cast<const char*>(bytes.begin()), bytes.size());
+    }
+    ReplaceWtf8SurrogatesForIcuSegmentation(&utf8);
+    auto stable_text = std::make_shared<BreakIteratorText>(std::move(utf8));
+    UErrorCode status = U_ZERO_ERROR;
+    UText utext = UTEXT_INITIALIZER;
+    utext_openUTF8(&utext, stable_text->utf8().data(), stable_text->length(),
+                   &status);
+    CHECK(U_SUCCESS(status));
+    break_iterator->setText(&utext, status);
+    utext_close(&utext);
+    CHECK(U_SUCCESS(status));
+    size_t estimated_size = stable_text->utf8().size();
+    return Managed<BreakIteratorText>::From(isolate, estimated_size,
+                                            std::move(stable_text));
+  }
+
+  auto unicode = std::make_unique<icu::UnicodeString>(
+      Intl::ToICUUnicodeString(isolate, text));
+  break_iterator->setText(*unicode);
+  auto stable_text = std::make_shared<BreakIteratorText>(std::move(unicode));
+  return Managed<BreakIteratorText>::From(isolate, 0, std::move(stable_text));
 }
 
 // ecma262 #sec-string.prototype.normalize

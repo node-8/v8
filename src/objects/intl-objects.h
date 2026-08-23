@@ -74,6 +74,27 @@ V8_EXPORT_PRIVATE std::vector<NumberFormatSpan> FlattenRegionsToParts(
 
 class JSCollator;
 
+class V8_EXPORT_PRIVATE BreakIteratorText {
+ public:
+  static constexpr ExternalPointerTag kManagedTag = kGenericManagedTag;
+
+  explicit BreakIteratorText(std::string utf8);
+  explicit BreakIteratorText(std::unique_ptr<icu::UnicodeString> unicode);
+  ~BreakIteratorText();
+
+  BreakIteratorText(const BreakIteratorText&) = delete;
+  BreakIteratorText& operator=(const BreakIteratorText&) = delete;
+
+  bool is_utf8() const { return unicode_ == nullptr; }
+  int32_t length() const;
+  const std::string& utf8() const { return utf8_; }
+  const icu::UnicodeString& unicode() const;
+
+ private:
+  std::string utf8_;
+  std::unique_ptr<icu::UnicodeString> unicode_;
+};
+
 class Intl {
  public:
   enum class BoundFunctionContextSlot {
@@ -401,6 +422,12 @@ class Intl {
   static DirectHandle<Managed<icu::UnicodeString>> SetTextToBreakIterator(
       Isolate* isolate, DirectHandle<String> text,
       icu::BreakIterator* break_iterator);
+
+  // Like SetTextToBreakIterator, but keeps UTF-8 text and native byte indices
+  // under Node-8 string semantics.
+  static DirectHandle<Managed<BreakIteratorText>>
+  SetTextToBreakIteratorForSegments(Isolate* isolate, DirectHandle<String> text,
+                                    icu::BreakIterator* break_iterator);
 
   // ecma262 #sec-string.prototype.normalize
   V8_WARN_UNUSED_RESULT static MaybeDirectHandle<String> Normalize(

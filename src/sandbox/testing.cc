@@ -1233,8 +1233,8 @@ SandboxTesting::FieldOffsetMap& SandboxTesting::GetFieldOffsetMap() {
     fields[JS_FUNCTION_TYPE]["shared_function_info"] =
         JSFunction::kSharedFunctionInfoOffset;
 #ifdef V8_INTL_SUPPORT
-    fields[JS_SEGMENTS_TYPE]["unicode_string"] =
-        JSSegments::kUnicodeStringOffset;
+    fields[JS_SEGMENTS_TYPE]["break_iterator_text"] =
+        JSSegments::kBreakIteratorTextOffset;
 #endif  // V8_INTL_SUPPORT
 #ifdef V8_ENABLE_WEBASSEMBLY
     fields[WASM_MODULE_OBJECT_TYPE]["managed_native_module"] =

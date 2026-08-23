@@ -32,6 +32,7 @@ Handle<String> JSSegmentIterator::GranularityAsString(Isolate* isolate) const {
 MaybeDirectHandle<JSSegmentIterator> JSSegmentIterator::Create(
     Isolate* isolate, DirectHandle<String> input_string,
     DirectHandle<Managed<icu::BreakIterator>> incoming_break_iterator,
+    DirectHandle<Managed<BreakIteratorText>> incoming_text,
     JSSegmenter::Granularity granularity) {
   // Clone a copy for both the ownership and not sharing with containing and
   // other calls to the iterator because icu::BreakIterator keep the iteration
@@ -44,9 +45,6 @@ MaybeDirectHandle<JSSegmentIterator> JSSegmentIterator::Create(
                         isolate);
 
   // 5. Set iterator.[[IteratedStringNextSegmentCodeUnitIndex]] to 0.
-  DirectHandle<Managed<icu::UnicodeString>> unicode_string =
-      Intl::SetTextToBreakIterator(isolate, input_string, break_iterator.get());
-
   break_iterator->first();
   DirectHandle<Managed<icu::BreakIterator>> managed_break_iterator =
       Managed<icu::BreakIterator>::From(isolate, 0, break_iterator);
@@ -61,7 +59,7 @@ MaybeDirectHandle<JSSegmentIterator> JSSegmentIterator::Create(
   segment_iterator->set_granularity(granularity);
   segment_iterator->set_icu_break_iterator(*managed_break_iterator);
   segment_iterator->set_raw_string(*input_string);
-  segment_iterator->set_unicode_string(*unicode_string);
+  segment_iterator->set_break_iterator_text(*incoming_text);
 
   return segment_iterator;
 }
@@ -144,7 +142,7 @@ MaybeDirectHandle<JSReceiver> JSSegmentIterator::Next(
         JSSegments::CreateSegmentDataObject(
             isolate, segment_iterator->granularity(), icu_break_iterator,
             direct_handle(segment_iterator->raw_string(), isolate),
-            *segment_iterator->unicode_string()->raw(), start_index,
+            *segment_iterator->break_iterator_text()->raw(), start_index,
             end_index));
   }
 

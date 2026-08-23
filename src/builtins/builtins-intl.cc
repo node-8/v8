@@ -1241,11 +1241,14 @@ BUILTIN(SegmentsPrototypeIterator) {
   CHECK_RECEIVER(JSSegments, segments, method_name);
   DirectHandle<Managed<icu::BreakIterator>> managed_break_iterator(
       segments->icu_break_iterator(), isolate);
+  DirectHandle<Managed<BreakIteratorText>> managed_text(
+      segments->break_iterator_text(), isolate);
 
   RETURN_RESULT_OR_FAILURE(
-      isolate, JSSegmentIterator::Create(
-                   isolate, direct_handle(segments->raw_string(), isolate),
-                   managed_break_iterator, segments->granularity()));
+      isolate,
+      JSSegmentIterator::Create(
+          isolate, direct_handle(segments->raw_string(), isolate),
+          managed_break_iterator, managed_text, segments->granularity()));
 }
 
 BUILTIN(V8BreakIteratorConstructor) {

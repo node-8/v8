@@ -28,8 +28,8 @@ TQ_OBJECT_CONSTRUCTORS_IMPL(JSSegments)
 ACCESSORS(JSSegments, icu_break_iterator, Tagged<Managed<icu::BreakIterator>>,
           kIcuBreakIteratorOffset)
 ACCESSORS(JSSegments, raw_string, Tagged<String>, kRawStringOffset)
-ACCESSORS(JSSegments, unicode_string, Tagged<Managed<icu::UnicodeString>>,
-          kUnicodeStringOffset)
+ACCESSORS(JSSegments, break_iterator_text, Tagged<Managed<BreakIteratorText>>,
+          kBreakIteratorTextOffset)
 
 inline void JSSegments::set_granularity(JSSegmenter::Granularity granularity) {
   DCHECK(GranularityBits::is_valid(granularity));
