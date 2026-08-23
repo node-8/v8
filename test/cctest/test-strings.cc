@@ -32,6 +32,8 @@
 
 #include <stdlib.h>
 
+#include <initializer_list>
+
 #include "include/v8-json.h"
 #include "include/v8-template.h"
 #include "src/api/api-inl.h"
@@ -2142,6 +2144,30 @@ TEST(CheckCachedDataInternalExternalUncachedStringTwoByte) {
     CHECK_EQ(external_string->resource()->cached_data(),
              external_string->resource()->data());
   }
+}
+
+TEST(Node8SingleCharacterFactory) {
+  if (!v8_flags.utf8_string_semantics) return;
+  CcTest::InitializeVM();
+  v8::HandleScope handle_scope(CcTest::isolate());
+  Factory* factory = CcTest::i_isolate()->factory();
+
+  const auto check = [factory](uint16_t code,
+                               std::initializer_list<uint8_t> expected) {
+    DirectHandle<String> string =
+        factory->LookupSingleCharacterStringFromCode(code);
+    CHECK(string->IsOneByteRepresentation());
+    CHECK_EQ(static_cast<uint32_t>(expected.size()), string->length());
+    uint32_t index = 0;
+    for (uint8_t byte : expected) CHECK_EQ(byte, string->Get(index++));
+    CHECK_EQ(*string, *factory->LookupSingleCharacterStringFromCode(code));
+  };
+
+  check(0x00e9, {0xe9});
+  check(0x4e2d, {0xe4, 0xb8, 0xad});
+  check(0xd83d, {0xed, 0xa0, 0xbd});
+  check(0xfeff, {0xef, 0xbb, 0xbf});
+  check(0xfffd, {0xef, 0xbf, 0xbd});
 }
 
 TEST(CheckIntlSegmentIteratorTerminateExecutionInterrupt) {

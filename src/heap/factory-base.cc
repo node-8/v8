@@ -33,6 +33,7 @@
 #include "src/objects/template-objects-inl.h"
 #include "src/roots/roots.h"
 #include "src/sandbox/check.h"
+#include "src/strings/unicode-inl.h"
 
 namespace v8 {
 namespace internal {
@@ -1018,6 +1019,14 @@ Handle<String> FactoryBase<Impl>::LookupSingleCharacterStringFromCode(
   if (code <= String::kMaxOneByteCharCode) {
     return Cast<String>(
         isolate()->root_handle(RootsTable::SingleCharacterStringIndex(code)));
+  }
+  // Do not let a remaining UTF-16 producer introduce a two-byte heap String.
+  if (v8_flags.utf8_string_semantics) {
+    uint8_t bytes[unibrow::Utf8::kMaxEncodedSize];
+    const unsigned length = unibrow::Utf8::Encode(
+        reinterpret_cast<char*>(bytes), code,
+        unibrow::Utf16::kNoPreviousCharacter, false);
+    return InternalizeString(base::Vector<const uint8_t>(bytes, length));
   }
   uint16_t buffer[] = {code};
   return InternalizeString(base::Vector<const uint16_t>(buffer, 1));
