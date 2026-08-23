@@ -962,8 +962,15 @@ Utf16CharacterStream* ScannerStream::For(
     case v8::ScriptCompiler::StreamedSource::WINDOWS_1252:
       return new Windows1252CharacterStream(static_cast<size_t>(0),
                                             source_stream);
-    case v8::ScriptCompiler::StreamedSource::UTF8:
+    case v8::ScriptCompiler::StreamedSource::UTF8: {
+      if (v8_flags.utf8_string_semantics) {
+        auto* stream = new BufferedCharacterStream<ChunkedStream>(
+            static_cast<size_t>(0), source_stream);
+        stream->set_node8_byte_source();
+        return stream;
+      }
       return new Utf8ExternalStreamingStream(source_stream);
+    }
   }
   UNREACHABLE();
 }

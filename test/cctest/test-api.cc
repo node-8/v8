@@ -24268,6 +24268,33 @@ TEST(StreamingUtf8Script) {
   RunStreamingTest(chunks, v8::ScriptCompiler::StreamedSource::UTF8);
 }
 
+TEST(Node8StreamingUtf8ByteSource) {
+  if (!i::v8_flags.utf8_string_semantics) return;
+
+  // Split the BOM and both occurrences of the CJK identifier into one-byte
+  // chunks. The node-8 scanner must decode syntax across chunk boundaries
+  // while keeping source positions in raw bytes.
+  const char* chunks[] = {"\xef",
+                          "\xbb",
+                          "\xbf",
+                          "const ",
+                          "\xe5",
+                          "\x8f",
+                          "\x98",
+                          "\xe9",
+                          "\x87",
+                          "\x8f",
+                          " = 13; globalThis.Result = ",
+                          "\xe5",
+                          "\x8f",
+                          "\x98",
+                          "\xe9",
+                          "\x87",
+                          "\x8f",
+                          ";",
+                          nullptr};
+  RunStreamingTest(chunks, v8::ScriptCompiler::StreamedSource::UTF8);
+}
 
 TEST(StreamingUtf8ScriptWithSplitCharactersSanityCheck) {
   // A sanity check to prove that the approach of splitting UTF-8
