@@ -995,14 +995,9 @@ typename HandleType<BigInt>::MaybeType BigInt::FromObject(
           Factory* factory = isolate->factory();
           DirectHandle<String> prefix =
               factory->NewProperSubString(str, 0, kMaxRenderedLength);
-          DirectHandle<SeqTwoByteString> ellipsis =
-              factory->NewRawTwoByteString(1).ToHandleChecked();
-          ellipsis->SeqTwoByteStringSet(0, 0x2026);
-          // TODO(42203211): The cast below should not be necessary. Let's
-          // remove it, when NewConsString is not templatized by the handle
-          // type.
-          str = factory->NewConsString(prefix, Cast<String>(ellipsis))
-                    .ToHandleChecked();
+          DirectHandle<String> ellipsis =
+              factory->LookupSingleCharacterStringFromCode(0x2026);
+          str = factory->NewConsString(prefix, ellipsis).ToHandleChecked();
         }
         THROW_NEW_ERROR(
             isolate, NewSyntaxError(MessageTemplate::kBigIntFromObject, str));

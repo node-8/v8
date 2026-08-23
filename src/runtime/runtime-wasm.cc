@@ -2749,12 +2749,10 @@ RUNTIME_FUNCTION(Runtime_WasmStringFromCodePoint) {
       unibrow::Utf16::LeadSurrogate(code_point),
       unibrow::Utf16::TrailSurrogate(code_point),
   };
-  DirectHandle<SeqTwoByteString> result =
+  DirectHandle<String> result =
       isolate->factory()
-          ->NewRawTwoByteString(arraysize(char_buffer))
+          ->NewStringFromTwoByte(base::VectorOf(char_buffer))
           .ToHandleChecked();
-  DisallowGarbageCollection no_gc;
-  CopyChars(result->GetChars(no_gc), char_buffer, arraysize(char_buffer));
   return *result;
 }
 
