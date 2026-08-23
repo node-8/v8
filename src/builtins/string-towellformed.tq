@@ -23,6 +23,10 @@ transitioning javascript builtin StringPrototypeToWellFormed(
   // 2. Let S be ? ToString(O).
   const s = ToThisString(receiver, methodName);
 
+  if (Utf8StringSemanticsEnabled()) {
+    return runtime::StringToWellFormed(context, Flatten(s));
+  }
+
   // Fast path: one-byte strings cannot have unpaired surrogates and are
   // definitionally well-formed.
   if (s.StringInstanceType().is_one_byte) return s;

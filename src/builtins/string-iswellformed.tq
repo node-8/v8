@@ -24,6 +24,9 @@ transitioning javascript builtin StringPrototypeIsWellFormed(
   const s = ToThisString(receiver, methodName);
 
   // 3. Return IsStringWellFormedUnicode(S).
+  if (Utf8StringSemanticsEnabled()) {
+    return runtime::StringIsWellFormed(context, Flatten(s));
+  }
 
   // Fast path: one-byte strings cannot have unpaired surrogates and are
   // definitionally well-formed.

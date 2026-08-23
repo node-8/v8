@@ -722,6 +722,23 @@ RUNTIME_FUNCTION(Runtime_StringIsWellFormed) {
   HandleScope handle_scope(isolate);
   DCHECK_EQ(1, args.length());
   DirectHandle<String> string = args.at<String>(0);
+  if (v8_flags.utf8_string_semantics) {
+    string = String::Flatten(isolate, string);
+    DisallowGarbageCollection no_gc;
+    String::FlatContent content = string->GetFlatContent(no_gc);
+    if (content.IsOneByte()) {
+      base::Vector<const uint8_t> bytes = content.ToByteVector();
+      const uint32_t non_ascii = NonAsciiStart(bytes.begin(), bytes.length());
+      Wtf8ByteCursor cursor(bytes, Wtf8ByteCursor::Policy::kStrictScalar,
+                            non_ascii);
+      while (cursor.has_next()) {
+        if (cursor.DecodeNext().status != Wtf8ByteCursor::Status::kValid) {
+          return ReadOnlyRoots(isolate).false_value();
+        }
+      }
+      return ReadOnlyRoots(isolate).true_value();
+    }
+  }
   return isolate->heap()->ToBoolean(
       String::IsWellFormedUnicode(isolate, string));
 }
@@ -730,6 +747,70 @@ RUNTIME_FUNCTION(Runtime_StringToWellFormed) {
   HandleScope handle_scope(isolate);
   DCHECK_EQ(1, args.length());
   DirectHandle<String> source = args.at<String>(0);
+  if (v8_flags.utf8_string_semantics) {
+    source = String::Flatten(isolate, source);
+    std::vector<uint8_t> rewritten;
+    bool changed = false;
+    bool too_long = false;
+    bool is_one_byte;
+    {
+      DisallowGarbageCollection no_gc;
+      String::FlatContent content = source->GetFlatContent(no_gc);
+      is_one_byte = content.IsOneByte();
+      if (is_one_byte) {
+        base::Vector<const uint8_t> bytes = content.ToByteVector();
+        const uint32_t non_ascii =
+            NonAsciiStart(bytes.begin(), bytes.length());
+        Wtf8ByteCursor cursor(bytes, Wtf8ByteCursor::Policy::kWebScalar,
+                              non_ascii);
+        while (cursor.has_next()) {
+          const size_t start = cursor.position();
+          Wtf8ByteCursor::Result result = cursor.DecodeNext();
+          const size_t end = cursor.position();
+          if (result.status == Wtf8ByteCursor::Status::kValid) {
+            if (!changed) continue;
+            const size_t byte_length = end - start;
+            if (rewritten.size() >
+                static_cast<size_t>(String::kMaxLength) - byte_length) {
+              too_long = true;
+              break;
+            }
+            rewritten.insert(rewritten.end(), bytes.begin() + start,
+                             bytes.begin() + end);
+            continue;
+          }
+
+          if (!changed) {
+            changed = true;
+            rewritten.reserve(bytes.size());
+            rewritten.insert(rewritten.end(), bytes.begin(),
+                             bytes.begin() + start);
+          }
+          static constexpr uint8_t kReplacementBytes[] = {0xEF, 0xBF, 0xBD};
+          if (rewritten.size() >
+              static_cast<size_t>(String::kMaxLength) -
+                  arraysize(kReplacementBytes)) {
+            too_long = true;
+            break;
+          }
+          rewritten.insert(rewritten.end(), std::begin(kReplacementBytes),
+                           std::end(kReplacementBytes));
+        }
+      }
+    }
+
+    if (is_one_byte) {
+      if (too_long) {
+        THROW_NEW_ERROR_RETURN_FAILURE(isolate, NewInvalidStringLengthError());
+      }
+      if (!changed) return *source;
+      DirectHandle<String> result;
+      ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
+          isolate, result,
+          isolate->factory()->NewStringFromOneByte(base::VectorOf(rewritten)));
+      return *result;
+    }
+  }
   if (String::IsWellFormedUnicode(isolate, source)) return *source;
   // String::IsWellFormedUnicode would have returned true above otherwise.
   DCHECK(!String::IsOneByteRepresentationUnderneath(*source));
