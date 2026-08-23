@@ -280,6 +280,48 @@ std::optional<base::uc32> GetSingletonClassCodePoint(RegExpTree* tree,
   return range.from();
 }
 
+RegExpTree* GetPositiveSingletonClassByteTree(RegExpTree* tree,
+                                              RegExpFlags flags, Zone* zone) {
+  if (!tree->IsClassRanges()) return nullptr;
+  RegExpClassRanges* character_class = tree->AsClassRanges();
+  if (character_class->is_negated()) return nullptr;
+  ZoneList<CharacterRange>* ranges = character_class->ranges(zone);
+  static constexpr int kMaxAlternatives = 64;
+  if (ranges->length() < 2 || ranges->length() > kMaxAlternatives) {
+    return nullptr;
+  }
+
+  bool contains_non_ascii = false;
+  for (CharacterRange range : *ranges) {
+    if (!range.IsSingleton() || range.from() == unibrow::Utf8::kBadChar) {
+      return nullptr;
+    }
+    if (!IsEitherUnicode(flags) &&
+        (unibrow::Utf16::IsLeadSurrogate(range.from()) ||
+         unibrow::Utf16::IsTrailSurrogate(range.from()))) {
+      return nullptr;
+    }
+    contains_non_ascii |= range.from() > unibrow::Utf8::kMaxOneByteChar;
+  }
+  if (!contains_non_ascii) return nullptr;
+
+  ZoneList<RegExpTree*>* alternatives =
+      zone->New<ZoneList<RegExpTree*>>(ranges->length(), zone);
+  for (CharacterRange range : *ranges) {
+    char bytes[unibrow::Utf8::kMaxEncodedSize];
+    unsigned length = unibrow::Utf8::Encode(
+        bytes, range.from(), unibrow::Utf16::kNoPreviousCharacter, false);
+    base::Vector<base::uc16> atom = zone->AllocateVector<base::uc16>(length);
+    for (unsigned i = 0; i < length; ++i) {
+      atom[i] = static_cast<uint8_t>(bytes[i]);
+    }
+    alternatives->Add(zone->New<RegExpAtom>(base::Vector<const base::uc16>(
+                          atom.data(), atom.length())),
+                      zone);
+  }
+  return zone->New<RegExpDisjunction>(alternatives);
+}
+
 }  // namespace
 
 // Generic RegExp methods. Dispatches to implementation specific methods.
@@ -870,6 +912,16 @@ bool RegExpImpl::CompileIrregexpFromSource(
   // The capture_count cannot change in any valid scenario. Prevent corrupted
   // pattern strings from generating invalid regexp code.
   SBXCHECK_EQ(compile_data.capture_count, re_data->capture_count());
+
+  if (v8_flags.utf8_string_semantics && is_one_byte &&
+      !IsIgnoreCase(flags) && !IsSticky(flags) &&
+      compile_data.capture_count == 0 && compile_data.tree->IsClassRanges() &&
+      !ContainsMalformedNode8Bytes(pattern)) {
+    if (RegExpTree* byte_tree = GetPositiveSingletonClassByteTree(
+            compile_data.tree, flags, &zone)) {
+      compile_data.tree = byte_tree;
+    }
+  }
 
   const bool can_be_zero_length = compile_data.tree->min_match() == 0;
   re_data->set_can_be_zero_length(can_be_zero_length);
