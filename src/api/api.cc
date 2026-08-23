@@ -7,6 +7,7 @@
 #include <algorithm>  // For min
 #include <cmath>      // For isnan.
 #include <limits>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -7557,6 +7558,89 @@ Local<String> v8::String::Concat(Isolate* v8_isolate, Local<String> left,
   return Utils::ToLocal(result);
 }
 
+namespace internal {
+
+class Node8ExternalStringResource final
+    : public v8::String::ExternalOneByteStringResource {
+ public:
+  using ResourceCallback =
+      void (*)(v8::String::ExternalStringResource* resource);
+
+  static std::unique_ptr<Node8ExternalStringResource> Create(
+      v8::String::ExternalStringResource* original, ResourceCallback lock,
+      ResourceCallback unlock, ResourceCallback dispose) {
+    lock(original);
+    const uint16_t* input = original->data();
+    size_t input_length = original->length();
+    size_t byte_length = 0;
+    int previous = unibrow::Utf16::kNoPreviousCharacter;
+    for (size_t index = 0; index < input_length; ++index) {
+      byte_length += unibrow::Utf8::Length(input[index], previous);
+      if (byte_length > static_cast<size_t>(i::String::kMaxLength)) {
+        unlock(original);
+        return nullptr;
+      }
+      previous = input[index];
+    }
+
+    std::string bytes(byte_length, '\0');
+    size_t output_offset = 0;
+    previous = unibrow::Utf16::kNoPreviousCharacter;
+    for (size_t index = 0; index < input_length; ++index) {
+      output_offset += unibrow::Utf8::Encode(bytes.data() + output_offset,
+                                             input[index], previous, false);
+      previous = input[index];
+    }
+    unlock(original);
+    DCHECK_EQ(byte_length, output_offset);
+    return std::unique_ptr<Node8ExternalStringResource>(
+        new Node8ExternalStringResource(original, input_length,
+                                        std::move(bytes), dispose));
+  }
+
+  ~Node8ExternalStringResource() override { dispose_(original_); }
+
+  const char* data() const override { return bytes_.data(); }
+  size_t length() const override { return bytes_.size(); }
+
+  void Unaccount(v8::Isolate* isolate) override {
+    original_->Unaccount(isolate);
+  }
+
+  size_t EstimateMemoryUsage() const override {
+    size_t original_estimate = original_->EstimateMemoryUsage();
+    if (original_estimate == kDefaultMemoryEstimate) {
+      original_estimate = original_length_ * sizeof(uint16_t);
+    }
+    if (original_estimate >
+        std::numeric_limits<size_t>::max() - bytes_.size()) {
+      return std::numeric_limits<size_t>::max();
+    }
+    return original_estimate + bytes_.size();
+  }
+
+  void EstimateSharedMemoryUsage(
+      SharedMemoryUsageRecorder* recorder) const override {
+    original_->EstimateSharedMemoryUsage(recorder);
+  }
+
+ private:
+  Node8ExternalStringResource(v8::String::ExternalStringResource* original,
+                              size_t original_length, std::string bytes,
+                              ResourceCallback dispose)
+      : original_(original),
+        original_length_(original_length),
+        bytes_(std::move(bytes)),
+        dispose_(dispose) {}
+
+  v8::String::ExternalStringResource* original_;
+  size_t original_length_;
+  std::string bytes_;
+  ResourceCallback dispose_;
+};
+
+}  // namespace internal
+
 MaybeLocal<String> v8::String::NewExternalTwoByte(
     Isolate* v8_isolate, v8::String::ExternalStringResource* resource) {
   CHECK(resource && resource->data());
@@ -7570,17 +7654,18 @@ MaybeLocal<String> v8::String::NewExternalTwoByte(
                                      RCCId::kAPI_String_NewExternalTwoByte);
   if (resource->length() > 0) {
     if (i::v8_flags.utf8_string_semantics) {
-      i::Handle<i::String> string;
-      if (!i_isolate->factory()
-               ->NewStringFromTwoByte(
-                   base::Vector<const uint16_t>(
-                       resource->data(), static_cast<int>(resource->length())),
-                   i::AllocationType::kOld)
-               .ToHandle(&string)) {
-        return {};
-      }
-      resource->Unaccount(v8_isolate);
-      resource->Dispose();
+      std::unique_ptr<i::Node8ExternalStringResource> byte_resource =
+          i::Node8ExternalStringResource::Create(
+              resource,
+              +[](ExternalStringResource* resource) { resource->Lock(); },
+              +[](ExternalStringResource* resource) { resource->Unlock(); },
+              +[](ExternalStringResource* resource) { resource->Dispose(); });
+      if (!byte_resource) return {};
+      i::DirectHandle<i::String> string =
+          i_isolate->factory()
+              ->NewExternalStringFromOneByte(byte_resource.get())
+              .ToHandleChecked();
+      byte_resource.release();
       return Utils::ToLocal(string);
     }
     i::DirectHandle<i::String> string =
