@@ -377,6 +377,9 @@ MaybeDirectHandle<T> New(Isolate* isolate, DirectHandle<JSFunction> constructor,
       JSFunction::GetDerivedMap(isolate, constructor, constructor));
   return T::New(isolate, map, locales, options, method_name);
 }
+
+icu::UnicodeString DecodeNode8StringForIcu(DirectHandle<String> string,
+                                           uint32_t offset);
 }  // namespace
 
 const uint8_t* Intl::ToLatin1LowerTable() { return &kToLower[0]; }
@@ -385,6 +388,9 @@ icu::UnicodeString Intl::ToICUUnicodeString(Isolate* isolate,
                                             DirectHandle<String> string,
                                             uint32_t offset) {
   DCHECK(string->IsFlat());
+  if (v8_flags.utf8_string_semantics && string->IsOneByteRepresentation()) {
+    return DecodeNode8StringForIcu(string, offset);
+  }
   DisallowGarbageCollection no_gc;
   std::unique_ptr<base::uc16[]> sap;
   // Short one-byte strings can be expanded on the stack to avoid allocating a
