@@ -12,6 +12,7 @@
 
 #include "src/common/globals.h"
 #include "src/execution/isolate-inl.h"
+#include "src/flags/flags.h"
 #include "src/strings/char-predicates-inl.h"
 #include "src/strings/string-search.h"
 #include "src/strings/unicode-inl.h"
@@ -177,6 +178,93 @@ bool IntoOneAndTwoByte(DirectHandle<String> uri, bool is_uri,
   return true;
 }
 
+size_t StrictUtf8SequenceLength(base::Vector<const uint8_t> bytes,
+                                size_t index) {
+  uint8_t first = bytes[index];
+  if (first <= 0x7F) return 1;
+  if (first >= 0xC2 && first <= 0xDF) {
+    return index + 1 < bytes.size() && (bytes[index + 1] & 0xC0) == 0x80 ? 2
+                                                                         : 0;
+  }
+  if (first >= 0xE0 && first <= 0xEF) {
+    if (index + 2 >= bytes.size()) return 0;
+    uint8_t second = bytes[index + 1];
+    bool valid_second = first == 0xE0   ? second >= 0xA0 && second <= 0xBF
+                        : first == 0xED ? second >= 0x80 && second <= 0x9F
+                                        : (second & 0xC0) == 0x80;
+    return valid_second && (bytes[index + 2] & 0xC0) == 0x80 ? 3 : 0;
+  }
+  if (first >= 0xF0 && first <= 0xF4) {
+    if (index + 3 >= bytes.size()) return 0;
+    uint8_t second = bytes[index + 1];
+    bool valid_second = first == 0xF0   ? second >= 0x90 && second <= 0xBF
+                        : first == 0xF4 ? second >= 0x80 && second <= 0x8F
+                                        : (second & 0xC0) == 0x80;
+    return valid_second && (bytes[index + 2] & 0xC0) == 0x80 &&
+                   (bytes[index + 3] & 0xC0) == 0x80
+               ? 4
+               : 0;
+  }
+  return 0;
+}
+
+bool DecodeNode8(base::Vector<const uint8_t> uri, bool is_uri,
+                 std::vector<uint8_t>* buffer) {
+  buffer->reserve(uri.size());
+  for (size_t index = 0; index < uri.size(); ++index) {
+    uint8_t byte = uri[index];
+    if (byte != '%') {
+      buffer->push_back(byte);
+      continue;
+    }
+
+    if (index + 2 >= uri.size()) return false;
+    int decoded = TwoDigitHex(uri[index + 1], uri[index + 2]);
+    if (decoded < 0) return false;
+
+    uint8_t first = static_cast<uint8_t>(decoded);
+    if (first <= unibrow::Utf8::kMaxOneByteChar) {
+      if (is_uri && IsReservedPredicate(first)) {
+        buffer->insert(buffer->end(), uri.begin() + index,
+                       uri.begin() + index + 3);
+      } else {
+        buffer->push_back(first);
+      }
+      index += 2;
+      continue;
+    }
+
+    size_t sequence_length;
+    if (first >= 0xC2 && first <= 0xDF) {
+      sequence_length = 2;
+    } else if (first >= 0xE0 && first <= 0xEF) {
+      sequence_length = 3;
+    } else if (first >= 0xF0 && first <= 0xF4) {
+      sequence_length = 4;
+    } else {
+      return false;
+    }
+
+    uint8_t octets[unibrow::Utf8::kMaxEncodedSize] = {first};
+    for (size_t offset = 1; offset < sequence_length; ++offset) {
+      index += 3;
+      if (index + 2 >= uri.size() || uri[index] != '%') return false;
+      decoded = TwoDigitHex(uri[index + 1], uri[index + 2]);
+      if (decoded < 0) return false;
+      octets[offset] = static_cast<uint8_t>(decoded);
+    }
+
+    if (StrictUtf8SequenceLength(
+            base::Vector<const uint8_t>(octets, sequence_length), 0) !=
+        sequence_length) {
+      return false;
+    }
+    buffer->insert(buffer->end(), octets, octets + sequence_length);
+    index += 2;
+  }
+  return true;
+}
+
 }  // anonymous namespace
 
 MaybeDirectHandle<String> Uri::Decode(Isolate* isolate,
@@ -184,6 +272,23 @@ MaybeDirectHandle<String> Uri::Decode(Isolate* isolate,
   uri = String::Flatten(isolate, uri);
   std::vector<uint8_t> one_byte_buffer;
   std::vector<base::uc16> two_byte_buffer;
+
+  if (v8_flags.utf8_string_semantics) {
+    bool is_one_byte;
+    {
+      DisallowGarbageCollection no_gc;
+      String::FlatContent content = uri->GetFlatContent(no_gc);
+      is_one_byte = content.IsOneByte();
+      if (is_one_byte &&
+          !DecodeNode8(content.ToByteVector(), is_uri, &one_byte_buffer)) {
+        THROW_NEW_ERROR(isolate, NewURIError());
+      }
+    }
+    if (is_one_byte) {
+      return isolate->factory()->NewStringFromOneByte(
+          base::VectorOf(one_byte_buffer));
+    }
+  }
 
   if (!IntoOneAndTwoByte(uri, is_uri, &one_byte_buffer, &two_byte_buffer)) {
     THROW_NEW_ERROR(isolate, NewURIError());
@@ -343,6 +448,33 @@ EncodeHelperOneByte(base::Vector<const uint8_t> uri_content, bool is_uri,
 }
 
 V8_NODISCARD EncodeStatus
+EncodeHelperNode8(base::Vector<const uint8_t> uri_content, bool is_uri,
+                  ResizableBuffer<uint8_t>* buffer) {
+  for (size_t index = 0; index < uri_content.size();) {
+    uint8_t byte = uri_content[index];
+    if (byte <= unibrow::Utf8::kMaxOneByteChar &&
+        (IsUnescapePredicateInUriComponent(byte) ||
+         (is_uri && IsUriSeparator(byte)))) {
+      if (!buffer->TryPushBack(byte)) {
+        return EncodeStatus::kAllocationFailure;
+      }
+      index++;
+      continue;
+    }
+
+    size_t sequence_length = StrictUtf8SequenceLength(uri_content, index);
+    if (sequence_length == 0) return EncodeStatus::kUriError;
+    for (size_t offset = 0; offset < sequence_length; ++offset) {
+      if (!AddEncodedOctetToBuffer(uri_content[index + offset], buffer)) {
+        return EncodeStatus::kAllocationFailure;
+      }
+    }
+    index += sequence_length;
+  }
+  return EncodeStatus::kSuccess;
+}
+
+V8_NODISCARD EncodeStatus
 EncodeHelperTwoByte(base::Vector<const base::uc16> uri_content, bool is_uri,
                     ResizableBuffer<uint8_t>* buffer) {
   for (int k = 0; k < uri_content.length(); k++) {
@@ -389,6 +521,9 @@ V8_NODISCARD EncodeStatus EncodeHelper(DirectHandle<String> uri, bool is_uri,
   DisallowGarbageCollection no_gc;
   String::FlatContent uri_content = uri->GetFlatContent(no_gc);
   if (uri_content.IsOneByte()) {
+    if (v8_flags.utf8_string_semantics) {
+      return EncodeHelperNode8(uri_content.ToByteVector(), is_uri, buffer);
+    }
     return EncodeHelperOneByte(uri_content.ToOneByteVector(), is_uri, buffer);
   }
   return EncodeHelperTwoByte(uri_content.ToUC16Vector(), is_uri, buffer);
