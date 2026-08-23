@@ -68,6 +68,26 @@ for (let index = 0; index < graphemeInput.length; ++index) {
 assertEquals(undefined, containingSegments.containing(-1));
 assertEquals(undefined, containingSegments.containing(graphemeInput.length));
 
+const asciiControlInput = 'a\r\nb\0c';
+const asciiControlSegments =
+    Array.from(graphemeSegmenter.segment(asciiControlInput));
+assertEquals(
+    ['a', '\r\n', 'b', '\0', 'c'],
+    asciiControlSegments.map(({segment}) => segment));
+assertEquals([0, 1, 3, 4, 5], asciiControlSegments.map(({index}) => index));
+assertContainingMatchesIteration(graphemeSegmenter, asciiControlInput);
+
+const asciiFastPathInput = 'abcdefgh\r\nijéx\u0301';
+const asciiFastPathSegments =
+    Array.from(graphemeSegmenter.segment(asciiFastPathInput));
+assertEquals(
+    ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', '\r\n', 'i', 'j', 'é', 'x\u0301'],
+    asciiFastPathSegments.map(({segment}) => segment));
+assertEquals(
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 14],
+    asciiFastPathSegments.map(({index}) => index));
+assertContainingMatchesIteration(graphemeSegmenter, asciiFastPathInput);
+
 for (const granularity of ['word', 'sentence']) {
   const input = 'café 世界. Déjà vu!';
   const segments =

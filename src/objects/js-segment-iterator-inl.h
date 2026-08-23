@@ -45,6 +45,17 @@ inline JSSegmenter::Granularity JSSegmentIterator::granularity() const {
   return GranularityBits::decode(flags());
 }
 
+inline void JSSegmentIterator::set_next_index(uint32_t next_index) {
+  DCHECK(NextIndexBits::is_valid(next_index));
+  int hints = flags();
+  hints = NextIndexBits::update(hints, next_index);
+  set_flags(hints);
+}
+
+inline uint32_t JSSegmentIterator::next_index() const {
+  return NextIndexBits::decode(flags());
+}
+
 }  // namespace internal
 }  // namespace v8
 

@@ -58,9 +58,12 @@ class JSSegmentIterator
 
   inline void set_granularity(JSSegmenter::Granularity granularity);
   inline JSSegmenter::Granularity granularity() const;
+  inline void set_next_index(uint32_t next_index);
+  inline uint32_t next_index() const;
 
   // Bit positions in |flags|.
   DEFINE_TORQUE_GENERATED_JS_SEGMENT_ITERATOR_FLAGS()
+  using NextIndexBits = GranularityBits::Next<uint32_t, 29>;
 
   static_assert(GranularityBits::is_valid(JSSegmenter::Granularity::GRAPHEME));
   static_assert(GranularityBits::is_valid(JSSegmenter::Granularity::WORD));

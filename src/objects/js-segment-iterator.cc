@@ -24,6 +24,41 @@
 namespace v8 {
 namespace internal {
 
+static_assert(String::kMaxLength <= JSSegmentIterator::NextIndexBits::kMax);
+
+namespace {
+
+constexpr size_t kMinAsciiGraphemeFastPathBytes = 8;
+
+bool HasLongAsciiPrefix(const std::string& bytes) {
+  if (bytes.size() < kMinAsciiGraphemeFastPathBytes) return false;
+  for (size_t i = 0; i < kMinAsciiGraphemeFastPathBytes; ++i) {
+    if (static_cast<uint8_t>(bytes[i]) >= 0x80) return false;
+  }
+  return true;
+}
+
+int32_t FastAsciiGraphemeEnd(const std::string& bytes, int32_t start) {
+  DCHECK_GE(start, 0);
+  DCHECK_LT(start, bytes.size());
+  const size_t index = static_cast<size_t>(start);
+  const uint8_t current = static_cast<uint8_t>(bytes[index]);
+  if (current >= 0x80) return icu::BreakIterator::DONE;
+
+  const size_t next_index = index + 1;
+  if (current == '\r' && next_index < bytes.size() &&
+      bytes[next_index] == '\n') {
+    return start + 2;
+  }
+  if (current <= 0x1f || current == 0x7f || next_index == bytes.size() ||
+      static_cast<uint8_t>(bytes[next_index]) < 0x80) {
+    return start + 1;
+  }
+  return icu::BreakIterator::DONE;
+}
+
+}  // namespace
+
 Handle<String> JSSegmentIterator::GranularityAsString(Isolate* isolate) const {
   return JSSegmenter::GetGranularityString(isolate, granularity());
 }
@@ -57,6 +92,7 @@ MaybeDirectHandle<JSSegmentIterator> JSSegmentIterator::Create(
 
   segment_iterator->set_flags(0);
   segment_iterator->set_granularity(granularity);
+  segment_iterator->set_next_index(0);
   segment_iterator->set_icu_break_iterator(*managed_break_iterator);
   segment_iterator->set_raw_string(*input_string);
   segment_iterator->set_break_iterator_text(*incoming_text);
@@ -69,8 +105,7 @@ MaybeDirectHandle<JSReceiver> JSSegmentIterator::Next(
     Isolate* isolate, DirectHandle<JSSegmentIterator> segment_iterator) {
   // Sketches of ideas for future performance improvements, roughly in order
   // of difficulty:
-  // - Add a fast path for grapheme segmentation of one-byte strings that
-  //   entirely skips calling into ICU.
+  // - Expand the ASCII grapheme fast path to more Unicode boundary classes.
   // - When we enter this function, perform a batch of calls into ICU and
   //   stash away the results, so the next couple of invocations can access
   //   them from a (Torque?) builtin without calling into C++.
@@ -94,9 +129,36 @@ MaybeDirectHandle<JSReceiver> JSSegmentIterator::Next(
   icu::BreakIterator* icu_break_iterator =
       segment_iterator->icu_break_iterator()->raw();
   // 5. Let startIndex be iterator.[[IteratedStringNextSegmentCodeUnitIndex]].
-  int32_t start_index = icu_break_iterator->current();
-  // 6. Let endIndex be ! FindBoundary(segmenter, string, startIndex, after).
-  int32_t end_index = icu_break_iterator->next();
+  int32_t start_index;
+  int32_t end_index;
+  BreakIteratorText* text = segment_iterator->break_iterator_text()->raw();
+  if (text->is_utf8() &&
+      segment_iterator->granularity() == JSSegmenter::Granularity::GRAPHEME) {
+    const uint32_t fast_start_index = segment_iterator->next_index();
+    bool fast_path_active = fast_start_index != 0;
+    start_index = fast_path_active ? static_cast<int32_t>(fast_start_index)
+                                   : icu_break_iterator->current();
+    if (!fast_path_active && start_index == 0) {
+      fast_path_active = HasLongAsciiPrefix(text->utf8());
+    }
+    if (!fast_path_active) {
+      end_index = icu_break_iterator->next();
+    } else if (start_index == text->length()) {
+      end_index = icu::BreakIterator::DONE;
+    } else {
+      end_index = FastAsciiGraphemeEnd(text->utf8(), start_index);
+      if (end_index == icu::BreakIterator::DONE) {
+        end_index = icu_break_iterator->following(start_index);
+        segment_iterator->set_next_index(0);
+      } else {
+        segment_iterator->set_next_index(end_index);
+      }
+    }
+  } else {
+    start_index = icu_break_iterator->current();
+    // 6. Let endIndex be ! FindBoundary(segmenter, string, startIndex, after).
+    end_index = icu_break_iterator->next();
+  }
 
   // 7. If endIndex is not finite, then
   if (end_index == icu::BreakIterator::DONE) {
