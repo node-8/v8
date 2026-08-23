@@ -611,6 +611,62 @@ class TestOneByteResource : public String::ExternalOneByteStringResource {
   int* counter_;
 };
 
+TEST(Node8ExternalTwoByteEncodesWtf8) {
+  if (!i::v8_flags.utf8_string_semantics) return;
+  LocalContext env;
+  v8::HandleScope scope(env.isolate());
+
+  uint16_t* data = i::NewArray<uint16_t>(7);
+  data[0] = 0x0061;
+  data[1] = 0x00e9;
+  data[2] = 0x4e2d;
+  data[3] = 0xd83d;
+  data[4] = 0xde00;
+  data[5] = 0xd800;
+  data[6] = 0;
+  int dispose_count = 0;
+  Local<String> string =
+      String::NewExternalTwoByte(env.isolate(),
+                                 new TestResource(data, &dispose_count))
+          .ToLocalChecked();
+
+  CHECK_EQ(1, dispose_count);
+  CHECK(!string->IsExternal());
+  CHECK(!string->IsExternalTwoByte());
+  CHECK(!string->CanMakeExternal(String::TWO_BYTE_ENCODING));
+
+  const uint8_t expected[] = {0x61, 0xc3, 0xa9, 0xe4, 0xb8, 0xad, 0xf0,
+                              0x9f, 0x98, 0x80, 0xed, 0xa0, 0x80};
+  i::DirectHandle<i::String> internal = v8::Utils::OpenDirectHandle(*string);
+  CHECK(internal->IsOneByteRepresentation());
+  CHECK_EQ(arraysize(expected), internal->length());
+  for (uint32_t index = 0; index < arraysize(expected); ++index) {
+    CHECK_EQ(expected[index], internal->Get(index));
+  }
+
+  int source_dispose_count = 0;
+  Local<String> source =
+      String::NewExternalTwoByte(
+          env.isolate(),
+          new TestResource(AsciiToTwoByteString(u"const café = 7; café"),
+                           &source_dispose_count))
+          .ToLocalChecked();
+  CHECK_EQ(1, source_dispose_count);
+  CHECK(!source->IsExternal());
+  Local<Script> script = v8_compile(source);
+  CHECK_EQ(7, v8_run_int32value(script));
+
+  uint16_t* external_data = i::NewArray<uint16_t>(2);
+  external_data[0] = 0x0061;
+  external_data[1] = 0;
+  TestResource* external_resource =
+      new TestResource(external_data, &dispose_count);
+  CHECK(!string->MakeExternal(env.isolate(), external_resource));
+  CHECK_EQ(1, dispose_count);
+  delete external_resource;
+  CHECK_EQ(2, dispose_count);
+}
+
 TEST(ScriptUsingStringResource) {
   int dispose_count = 0;
   const char* c_source = "1 + 2 * 3";

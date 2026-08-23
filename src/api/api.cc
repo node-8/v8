@@ -7569,6 +7569,20 @@ MaybeLocal<String> v8::String::NewExternalTwoByte(
   ApiRuntimeCallStatsScope rcs_scope(i_isolate,
                                      RCCId::kAPI_String_NewExternalTwoByte);
   if (resource->length() > 0) {
+    if (i::v8_flags.utf8_string_semantics) {
+      i::Handle<i::String> string;
+      if (!i_isolate->factory()
+               ->NewStringFromTwoByte(
+                   base::Vector<const uint16_t>(
+                       resource->data(), static_cast<int>(resource->length())),
+                   i::AllocationType::kOld)
+               .ToHandle(&string)) {
+        return {};
+      }
+      resource->Unaccount(v8_isolate);
+      resource->Dispose();
+      return Utils::ToLocal(string);
+    }
     i::DirectHandle<i::String> string =
         i_isolate->factory()
             ->NewExternalStringFromTwoByte(resource)
@@ -7615,6 +7629,8 @@ bool v8::String::MakeExternal(v8::String::ExternalStringResource* resource) {
 bool v8::String::MakeExternal(Isolate* isolate,
                               v8::String::ExternalStringResource* resource) {
   i::DisallowGarbageCollection no_gc;
+
+  if (i::v8_flags.utf8_string_semantics) return false;
 
   i::Tagged<i::String> obj = *Utils::OpenDirectHandle(this);
 
@@ -7667,6 +7683,9 @@ bool v8::String::MakeExternal(
 }
 
 bool v8::String::CanMakeExternal(Encoding encoding) const {
+  if (i::v8_flags.utf8_string_semantics && encoding == TWO_BYTE_ENCODING) {
+    return false;
+  }
   i::Tagged<i::String> obj = *Utils::OpenDirectHandle(this);
 
   return obj->SupportsExternalization(encoding);
