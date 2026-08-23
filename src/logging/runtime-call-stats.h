@@ -173,6 +173,7 @@ namespace v8::internal {
   V(SharedArrayBuffer_NewBackingStore)                     \
   V(String_Concat)                                         \
   V(String_NewExternalOneByte)                             \
+  V(String_NewExternalBytes)                               \
   V(String_NewExternalTwoByte)                             \
   V(String_NewFromBytes)                                   \
   V(String_NewFromOneByte)                                 \

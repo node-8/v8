@@ -679,6 +679,94 @@ TEST(Node8ExternalTwoByteEncodesWtf8) {
   CHECK_EQ(1, source_dispose_count);
 }
 
+TEST(Node8Latin1ApiEncodesUtf8) {
+  if (!i::v8_flags.utf8_string_semantics) return;
+  int external_dispose_count = 0;
+  int raw_external_dispose_count = 0;
+  int make_external_dispose_count = 0;
+  {
+    LocalContext env;
+    v8::HandleScope scope(env.isolate());
+
+    const uint8_t latin1[] = {0x61, 0xe9, 0xff};
+    const uint8_t utf8[] = {0x61, 0xc3, 0xa9, 0xc3, 0xbf};
+    Local<String> string =
+        String::NewFromOneByte(env.isolate(), latin1,
+                               v8::NewStringType::kNormal,
+                               arraysize(latin1))
+            .ToLocalChecked();
+    i::DirectHandle<i::String> internal = v8::Utils::OpenDirectHandle(*string);
+    CHECK_EQ(arraysize(utf8), internal->length());
+    for (uint32_t index = 0; index < arraysize(utf8); index++) {
+      CHECK_EQ(utf8[index], internal->Get(index));
+    }
+
+    Local<String> raw =
+        String::NewFromBytes(env.isolate(), latin1,
+                             v8::NewStringType::kNormal,
+                             arraysize(latin1))
+            .ToLocalChecked();
+    i::DirectHandle<i::String> raw_internal =
+        v8::Utils::OpenDirectHandle(*raw);
+    CHECK_EQ(arraysize(latin1), raw_internal->length());
+    for (uint32_t index = 0; index < arraysize(latin1); index++) {
+      CHECK_EQ(latin1[index], raw_internal->Get(index));
+    }
+
+    char* external_data = i::NewArray<char>(4);
+    external_data[0] = 'a';
+    external_data[1] = static_cast<char>(0xe9);
+    external_data[2] = static_cast<char>(0xff);
+    external_data[3] = 0;
+    TestOneByteResource* external_resource =
+        new TestOneByteResource(external_data, &external_dispose_count);
+    Local<String> external =
+        String::NewExternalOneByte(env.isolate(), external_resource)
+            .ToLocalChecked();
+    CHECK(external->IsExternalOneByte());
+    CHECK_NE(external_resource, external->GetExternalOneByteStringResource());
+    internal = v8::Utils::OpenDirectHandle(*external);
+    CHECK_EQ(arraysize(utf8), internal->length());
+    for (uint32_t index = 0; index < arraysize(utf8); index++) {
+      CHECK_EQ(utf8[index], internal->Get(index));
+    }
+
+    char* raw_external_data = i::NewArray<char>(4);
+    raw_external_data[0] = 'a';
+    raw_external_data[1] = static_cast<char>(0xe9);
+    raw_external_data[2] = static_cast<char>(0xff);
+    raw_external_data[3] = 0;
+    TestOneByteResource* raw_external_resource =
+        new TestOneByteResource(raw_external_data, &raw_external_dispose_count);
+    Local<String> raw_external =
+        String::NewExternalBytes(env.isolate(), raw_external_resource)
+            .ToLocalChecked();
+    CHECK_EQ(raw_external_resource,
+             raw_external->GetExternalOneByteStringResource());
+    raw_internal = v8::Utils::OpenDirectHandle(*raw_external);
+    CHECK_EQ(arraysize(latin1), raw_internal->length());
+    for (uint32_t index = 0; index < arraysize(latin1); index++) {
+      CHECK_EQ(latin1[index], raw_internal->Get(index));
+    }
+
+    char* make_external_data = i::StrDup("a");
+    TestOneByteResource* make_external_resource = new TestOneByteResource(
+        make_external_data, &make_external_dispose_count);
+    CHECK(!string->CanMakeExternal(String::ONE_BYTE_ENCODING));
+    CHECK(!string->MakeExternal(env.isolate(), make_external_resource));
+    CHECK_EQ(0, make_external_dispose_count);
+    delete make_external_resource;
+    CHECK_EQ(1, make_external_dispose_count);
+  }
+  {
+    i::DisableConservativeStackScanningScopeForTesting no_stack_scanning(
+        CcTest::heap());
+    i::heap::InvokeMemoryReducingMajorGCs(CcTest::heap());
+  }
+  CHECK_EQ(1, external_dispose_count);
+  CHECK_EQ(1, raw_external_dispose_count);
+}
+
 TEST(ScriptUsingStringResource) {
   int dispose_count = 0;
   const char* c_source = "1 + 2 * 3";

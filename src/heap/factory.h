@@ -324,6 +324,10 @@ class V8_EXPORT_PRIVATE Factory : public FactoryBase<Factory> {
       base::Vector<const base::uc16> str,
       AllocationType allocation = AllocationType::kYoung);
 
+  V8_WARN_UNUSED_RESULT MaybeHandle<String> NewStringFromLatin1(
+      base::Vector<const uint8_t> str,
+      AllocationType allocation = AllocationType::kYoung);
+
   V8_WARN_UNUSED_RESULT MaybeDirectHandle<String> NewStringFromTwoByte(
       const ZoneVector<base::uc16>* str,
       AllocationType allocation = AllocationType::kYoung);

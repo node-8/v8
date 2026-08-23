@@ -554,6 +554,11 @@ class V8_EXPORT String : public Name {
   static V8_WARN_UNUSED_RESULT MaybeLocal<String> NewExternalOneByte(
       Isolate* isolate, ExternalOneByteStringResource* resource);
 
+  /** Creates an external string from raw bytes without validation or
+   * transcoding. The resource lifetime matches NewExternalOneByte. **/
+  static V8_WARN_UNUSED_RESULT MaybeLocal<String> NewExternalBytes(
+      Isolate* isolate, ExternalOneByteStringResource* resource);
+
   /**
    * Associate an external string resource with this string by transforming it
    * in place so that existing references to this string in the JavaScript heap

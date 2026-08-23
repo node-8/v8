@@ -958,6 +958,41 @@ MaybeHandle<String> Factory::NewStringFromTwoByte(
   return NewStringFromTwoByte(string.begin(), string.length(), allocation);
 }
 
+MaybeHandle<String> Factory::NewStringFromLatin1(
+    base::Vector<const uint8_t> string, AllocationType allocation) {
+  DCHECK_NE(allocation, AllocationType::kReadOnly);
+  if (string.empty()) return empty_string();
+
+  size_t byte_length = string.size();
+  for (uint8_t value : string) {
+    if (value > 0x7F) byte_length++;
+  }
+  if (byte_length > static_cast<size_t>(String::kMaxLength)) {
+    THROW_NEW_ERROR(isolate(), NewInvalidStringLengthError());
+  }
+  if (byte_length == string.size()) {
+    return NewStringFromOneByte(string, allocation);
+  }
+
+  Handle<SeqOneByteString> result;
+  ASSIGN_RETURN_ON_EXCEPTION(
+      isolate(), result,
+      NewRawOneByteString(static_cast<int>(byte_length), allocation));
+  DisallowGarbageCollection no_gc;
+  uint8_t* output = result->GetChars(no_gc);
+  size_t output_offset = 0;
+  for (uint8_t value : string) {
+    if (value <= 0x7F) {
+      output[output_offset++] = value;
+    } else {
+      output[output_offset++] = 0xC0 | (value >> 6);
+      output[output_offset++] = 0x80 | (value & 0x3F);
+    }
+  }
+  DCHECK_EQ(byte_length, output_offset);
+  return result;
+}
+
 MaybeDirectHandle<String> Factory::NewStringFromTwoByte(
     const ZoneVector<base::uc16>* string, AllocationType allocation) {
   return NewStringFromTwoByte(string->data(), static_cast<int>(string->size()),

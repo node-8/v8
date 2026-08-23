@@ -7462,6 +7462,22 @@ inline i::MaybeHandle<i::String> NewString(i::Factory* factory,
 }
 
 V8_WARN_UNUSED_RESULT
+inline i::MaybeHandle<i::String> NewLatin1String(
+    i::Factory* factory, NewStringType type,
+    base::Vector<const uint8_t> string) {
+  if (!i::v8_flags.utf8_string_semantics) {
+    return NewString(factory, type, string);
+  }
+  i::Handle<i::String> result;
+  ASSIGN_RETURN_ON_EXCEPTION(factory->isolate(), result,
+                             factory->NewStringFromLatin1(string));
+  if (type == NewStringType::kInternalized) {
+    return factory->InternalizeString(result);
+  }
+  return result;
+}
+
+V8_WARN_UNUSED_RESULT
 inline i::MaybeHandle<i::String> NewString(
     i::Factory* factory, NewStringType type,
     base::Vector<const uint16_t> string) {
@@ -7476,8 +7492,8 @@ static_assert(v8::String::kMaxLength == i::String::kMaxLength);
 }  // anonymous namespace
 
 // TODO(dcarney): throw a context free exception.
-#define NEW_STRING(v8_isolate, class_name, function_name, Char, data, type,   \
-                   length)                                                    \
+#define NEW_STRING_WITH_HELPER(v8_isolate, class_name, function_name, Char,  \
+                               data, type, length, helper)                    \
   MaybeLocal<String> result;                                                  \
   if (length == 0) {                                                          \
     result = String::Empty(v8_isolate);                                       \
@@ -7491,11 +7507,16 @@ static_assert(v8::String::kMaxLength == i::String::kMaxLength);
         i_isolate, RCCId::kAPI_##class_name##_##function_name);               \
     if (length < 0) length = StringLength(data);                              \
     i::DirectHandle<i::String> handle_result =                                \
-        NewString(i_isolate->factory(), type,                                 \
-                  base::Vector<const Char>(data, length))                     \
+        helper(i_isolate->factory(), type,                                    \
+               base::Vector<const Char>(data, length))                        \
             .ToHandleChecked();                                               \
     result = Utils::ToLocal(handle_result);                                   \
   }
+
+#define NEW_STRING(v8_isolate, class_name, function_name, Char, data, type,   \
+                   length)                                                    \
+  NEW_STRING_WITH_HELPER(v8_isolate, class_name, function_name, Char, data,   \
+                         type, length, NewString)
 
 Local<String> String::NewFromUtf8Literal(Isolate* v8_isolate,
                                          const char* literal,
@@ -7528,7 +7549,16 @@ MaybeLocal<String> String::NewFromBytes(Isolate* v8_isolate,
 MaybeLocal<String> String::NewFromOneByte(Isolate* v8_isolate,
                                           const uint8_t* data,
                                           NewStringType type, int length) {
-  NEW_STRING(v8_isolate, String, NewFromOneByte, uint8_t, data, type, length);
+  if (i::v8_flags.utf8_string_semantics) {
+    if (length < 0) length = StringLength(data);
+    size_t byte_length = length;
+    for (int index = 0; index < length; index++) {
+      if (data[index] > 0x7F) byte_length++;
+    }
+    if (byte_length > static_cast<size_t>(i::String::kMaxLength)) return {};
+  }
+  NEW_STRING_WITH_HELPER(v8_isolate, String, NewFromOneByte, uint8_t, data,
+                         type, length, NewLatin1String);
   return result;
 }
 
@@ -7560,41 +7590,70 @@ Local<String> v8::String::Concat(Isolate* v8_isolate, Local<String> left,
 
 namespace internal {
 
+bool EncodeUtf16AsWtf8(const uint16_t* input, size_t input_length,
+                       std::string* bytes) {
+  size_t byte_length = 0;
+  int previous = unibrow::Utf16::kNoPreviousCharacter;
+  for (size_t index = 0; index < input_length; ++index) {
+    byte_length += unibrow::Utf8::Length(input[index], previous);
+    if (byte_length > static_cast<size_t>(i::String::kMaxLength)) return false;
+    previous = input[index];
+  }
+
+  bytes->resize(byte_length);
+  size_t output_offset = 0;
+  previous = unibrow::Utf16::kNoPreviousCharacter;
+  for (size_t index = 0; index < input_length; ++index) {
+    output_offset += unibrow::Utf8::Encode(bytes->data() + output_offset,
+                                           input[index], previous, false);
+    previous = input[index];
+  }
+  DCHECK_EQ(byte_length, output_offset);
+  return true;
+}
+
+bool EncodeLatin1AsUtf8(const char* input, size_t input_length,
+                        std::string* bytes) {
+  size_t byte_length = input_length;
+  for (size_t index = 0; index < input_length; index++) {
+    if (static_cast<uint8_t>(input[index]) > 0x7F) byte_length++;
+  }
+  if (byte_length > static_cast<size_t>(i::String::kMaxLength)) return false;
+
+  bytes->resize(byte_length);
+  size_t output_offset = 0;
+  for (size_t index = 0; index < input_length; index++) {
+    uint8_t value = static_cast<uint8_t>(input[index]);
+    if (value <= 0x7F) {
+      (*bytes)[output_offset++] = static_cast<char>(value);
+    } else {
+      (*bytes)[output_offset++] = static_cast<char>(0xC0 | (value >> 6));
+      (*bytes)[output_offset++] = static_cast<char>(0x80 | (value & 0x3F));
+    }
+  }
+  DCHECK_EQ(byte_length, output_offset);
+  return true;
+}
+
+template <typename OriginalResource>
 class Node8ExternalStringResource final
     : public v8::String::ExternalOneByteStringResource {
  public:
-  using ResourceCallback =
-      void (*)(v8::String::ExternalStringResource* resource);
+  using ResourceCallback = void (*)(OriginalResource* resource);
 
+  template <typename Encode>
   static std::unique_ptr<Node8ExternalStringResource> Create(
-      v8::String::ExternalStringResource* original, ResourceCallback lock,
+      OriginalResource* original, Encode encode, ResourceCallback lock,
       ResourceCallback unlock, ResourceCallback dispose) {
     lock(original);
-    const uint16_t* input = original->data();
-    size_t input_length = original->length();
-    size_t byte_length = 0;
-    int previous = unibrow::Utf16::kNoPreviousCharacter;
-    for (size_t index = 0; index < input_length; ++index) {
-      byte_length += unibrow::Utf8::Length(input[index], previous);
-      if (byte_length > static_cast<size_t>(i::String::kMaxLength)) {
-        unlock(original);
-        return nullptr;
-      }
-      previous = input[index];
-    }
-
-    std::string bytes(byte_length, '\0');
-    size_t output_offset = 0;
-    previous = unibrow::Utf16::kNoPreviousCharacter;
-    for (size_t index = 0; index < input_length; ++index) {
-      output_offset += unibrow::Utf8::Encode(bytes.data() + output_offset,
-                                             input[index], previous, false);
-      previous = input[index];
-    }
+    const size_t original_byte_length =
+        original->length() * sizeof(*original->data());
+    std::string bytes;
+    bool encoded = encode(original->data(), original->length(), &bytes);
     unlock(original);
-    DCHECK_EQ(byte_length, output_offset);
+    if (!encoded) return nullptr;
     return std::unique_ptr<Node8ExternalStringResource>(
-        new Node8ExternalStringResource(original, input_length,
+        new Node8ExternalStringResource(original, original_byte_length,
                                         std::move(bytes), dispose));
   }
 
@@ -7610,7 +7669,7 @@ class Node8ExternalStringResource final
   size_t EstimateMemoryUsage() const override {
     size_t original_estimate = original_->EstimateMemoryUsage();
     if (original_estimate == kDefaultMemoryEstimate) {
-      original_estimate = original_length_ * sizeof(uint16_t);
+      original_estimate = original_byte_length_;
     }
     if (original_estimate >
         std::numeric_limits<size_t>::max() - bytes_.size()) {
@@ -7625,16 +7684,16 @@ class Node8ExternalStringResource final
   }
 
  private:
-  Node8ExternalStringResource(v8::String::ExternalStringResource* original,
-                              size_t original_length, std::string bytes,
+  Node8ExternalStringResource(OriginalResource* original,
+                              size_t original_byte_length, std::string bytes,
                               ResourceCallback dispose)
       : original_(original),
-        original_length_(original_length),
+        original_byte_length_(original_byte_length),
         bytes_(std::move(bytes)),
         dispose_(dispose) {}
 
-  v8::String::ExternalStringResource* original_;
-  size_t original_length_;
+  OriginalResource* original_;
+  size_t original_byte_length_;
   std::string bytes_;
   ResourceCallback dispose_;
 };
@@ -7654,12 +7713,13 @@ MaybeLocal<String> v8::String::NewExternalTwoByte(
                                      RCCId::kAPI_String_NewExternalTwoByte);
   if (resource->length() > 0) {
     if (i::v8_flags.utf8_string_semantics) {
-      std::unique_ptr<i::Node8ExternalStringResource> byte_resource =
-          i::Node8ExternalStringResource::Create(
-              resource,
-              +[](ExternalStringResource* resource) { resource->Lock(); },
-              +[](ExternalStringResource* resource) { resource->Unlock(); },
-              +[](ExternalStringResource* resource) { resource->Dispose(); });
+      using Adapter =
+          i::Node8ExternalStringResource<ExternalStringResource>;
+      std::unique_ptr<Adapter> byte_resource = Adapter::Create(
+          resource, i::EncodeUtf16AsWtf8,
+          +[](ExternalStringResource* resource) { resource->Lock(); },
+          +[](ExternalStringResource* resource) { resource->Unlock(); },
+          +[](ExternalStringResource* resource) { resource->Dispose(); });
       if (!byte_resource) return {};
       i::DirectHandle<i::String> string =
           i_isolate->factory()
@@ -7694,6 +7754,57 @@ MaybeLocal<String> v8::String::NewExternalOneByte(
                                      RCCId::kAPI_String_NewExternalOneByte);
   if (resource->length() == 0) {
     // The resource isn't going to be used, free it immediately.
+    resource->Unaccount(v8_isolate);
+    resource->Dispose();
+    return Utils::ToLocal(i_isolate->factory()->empty_string());
+  }
+  CHECK_NOT_NULL(resource->data());
+  if (i::v8_flags.utf8_string_semantics) {
+    const char* data = resource->data();
+    bool is_ascii = true;
+    for (size_t index = 0; index < resource->length(); index++) {
+      if (static_cast<uint8_t>(data[index]) > 0x7F) {
+        is_ascii = false;
+        break;
+      }
+    }
+    if (!is_ascii) {
+      using Adapter =
+          i::Node8ExternalStringResource<ExternalOneByteStringResource>;
+      std::unique_ptr<Adapter> byte_resource = Adapter::Create(
+          resource, i::EncodeLatin1AsUtf8,
+          +[](ExternalOneByteStringResource* resource) { resource->Lock(); },
+          +[](ExternalOneByteStringResource* resource) { resource->Unlock(); },
+          +[](ExternalOneByteStringResource* resource) {
+            resource->Dispose();
+          });
+      if (!byte_resource) return {};
+      i::DirectHandle<i::String> string =
+          i_isolate->factory()
+              ->NewExternalStringFromOneByte(byte_resource.get())
+              .ToHandleChecked();
+      byte_resource.release();
+      return Utils::ToLocal(string);
+    }
+  }
+  i::DirectHandle<i::String> string =
+      i_isolate->factory()
+          ->NewExternalStringFromOneByte(resource)
+          .ToHandleChecked();
+  return Utils::ToLocal(string);
+}
+
+MaybeLocal<String> v8::String::NewExternalBytes(
+    Isolate* v8_isolate, v8::String::ExternalOneByteStringResource* resource) {
+  CHECK_NOT_NULL(resource);
+  if (resource->length() > static_cast<size_t>(i::String::kMaxLength)) {
+    return {};
+  }
+  i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(v8_isolate);
+  EnterV8NoScriptNoExceptionScope api_scope(i_isolate);
+  ApiRuntimeCallStatsScope rcs_scope(i_isolate,
+                                     RCCId::kAPI_String_NewExternalBytes);
+  if (resource->length() == 0) {
     resource->Unaccount(v8_isolate);
     resource->Dispose();
     return Utils::ToLocal(i_isolate->factory()->empty_string());
@@ -7747,6 +7858,8 @@ bool v8::String::MakeExternal(
     Isolate* isolate, v8::String::ExternalOneByteStringResource* resource) {
   i::DisallowGarbageCollection no_gc;
 
+  if (i::v8_flags.utf8_string_semantics) return false;
+
   i::Tagged<i::String> obj = *Utils::OpenDirectHandle(this);
 
   if (i::IsThinString(obj)) {
@@ -7768,9 +7881,7 @@ bool v8::String::MakeExternal(
 }
 
 bool v8::String::CanMakeExternal(Encoding encoding) const {
-  if (i::v8_flags.utf8_string_semantics && encoding == TWO_BYTE_ENCODING) {
-    return false;
-  }
+  if (i::v8_flags.utf8_string_semantics) return false;
   i::Tagged<i::String> obj = *Utils::OpenDirectHandle(this);
 
   return obj->SupportsExternalization(encoding);
