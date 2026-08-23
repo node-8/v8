@@ -1805,6 +1805,11 @@ TNode<Int32T> StringBuiltinsAssembler::LoadSurrogatePairAt(
   return var_result.value();
 }
 
+TNode<BoolT> StringBuiltinsAssembler::Utf8StringSemanticsEnabled() {
+  return LoadRuntimeFlag(
+      ExternalReference::address_of_utf8_string_semantics_flag());
+}
+
 TNode<BoolT> StringBuiltinsAssembler::HasUnpairedSurrogate(TNode<String> string,
                                                            Label* if_indirect) {
   TNode<Uint16T> instance_type = LoadInstanceType(string);

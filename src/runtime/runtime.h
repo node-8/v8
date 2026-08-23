@@ -516,6 +516,7 @@ constexpr bool CanTriggerGC(T... properties) {
   F(StringBuilderConcat, 3, 1)                       \
   F(StringCharCodeAt, 2, 1)                          \
   F(StringCodePointAt, 2, 1)                         \
+  F(StringIteratorNextWtf8, 1, 1)                    \
   F(StringCompare, 2, 1)                             \
   F(StringEqual, 2, 1)                               \
   F(StringEscapeQuotes, 1, 1)                        \
@@ -529,6 +530,7 @@ constexpr bool CanTriggerGC(T... properties) {
   F(StringReplaceOneCharWithString, 3, 1)            \
   F(StringSubstring, 3, 1)                           \
   F(StringToArray, 2, 1)                             \
+  F(StringToListWtf8, 1, 1)                          \
   F(StringToWellFormed, 1, 1)
 
 #define FOR_EACH_INTRINSIC_SYMBOL(F, I)    \

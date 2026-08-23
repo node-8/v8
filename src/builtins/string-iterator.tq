@@ -37,6 +37,19 @@ transitioning javascript builtin StringIteratorPrototypeNext(
   if (position >= length) {
     return AllocateJSIteratorResult(Undefined, True);
   }
+  if (Utf8StringSemanticsEnabled()) {
+    const code: uint32 = Convert<uint32>(
+        StringCharCodeAt(string, Convert<uintptr>(position)));
+    if (code < 0x80) {
+      const nextPosition = position + 1;
+      const value = SubString(
+          string, Convert<uintptr>(position), Convert<uintptr>(nextPosition));
+      iterator.index = SmiTag(nextPosition);
+      return AllocateJSIteratorResult(value, False);
+    }
+    const value = runtime::StringIteratorNextWtf8(context, iterator);
+    return AllocateJSIteratorResult(value, False);
+  }
   // Move to next codepoint.
   const encoding = UnicodeEncoding::UTF16;
   const ch = string::LoadSurrogatePairAt(string, length, position, encoding);

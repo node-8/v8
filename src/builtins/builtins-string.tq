@@ -10,6 +10,8 @@ namespace string {
 namespace runtime {
 extern transitioning runtime ToString(Context, JSAny): String;
 extern runtime StringCodePointAt(Context, String, Number): Number;
+extern runtime StringIteratorNextWtf8(Context, JSStringIterator): String;
+extern runtime StringToListWtf8(Context, String): JSArray;
 }
 
 // LINT.IfChange
@@ -89,12 +91,16 @@ transitioning javascript builtin StringPrototypeValueOf(
 
 extern macro StringBuiltinsAssembler::LoadSurrogatePairAt(
     String, intptr, intptr, constexpr UnicodeEncoding): int32;
+extern macro StringBuiltinsAssembler::Utf8StringSemanticsEnabled(): bool;
 extern macro StringBuiltinsAssembler::StringFromSingleUTF16EncodedCodePoint(
     int32): String;
 
 // This function assumes StringPrimitiveWithNoCustomIteration is true.
 transitioning builtin StringToList(implicit context: Context)(
                                    string: String): JSArray {
+  if (Utf8StringSemanticsEnabled()) {
+    return runtime::StringToListWtf8(context, string);
+  }
   const kind = ElementsKind::PACKED_ELEMENTS;
   const stringLength: intptr = string.length_intptr;
 

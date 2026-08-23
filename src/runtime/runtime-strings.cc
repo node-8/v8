@@ -343,6 +343,130 @@ RUNTIME_FUNCTION(Runtime_StringCodePointAt) {
                       (second_code_point + surrogate_offset));
 }
 
+namespace {
+
+MaybeDirectHandle<String> NewWtf8IteratorValue(
+    Isolate* isolate, DirectHandle<String> subject, uint32_t start,
+    uint32_t end, Wtf8ByteCursor::Status status) {
+  if (status != Wtf8ByteCursor::Status::kReplaced) {
+    return isolate->factory()->NewSubString(subject, start, end);
+  }
+  static constexpr uint8_t kReplacementBytes[] = {0xEF, 0xBF, 0xBD};
+  return isolate->factory()->NewStringFromOneByte(
+      base::ArrayVector(kReplacementBytes));
+}
+
+uint32_t Utf16IteratorNextIndex(DirectHandle<String> subject, uint32_t index) {
+  const uint32_t next = index + 1;
+  if (next >= static_cast<uint32_t>(subject->length())) return next;
+  const uint16_t lead = subject->Get(index);
+  const uint16_t trail = subject->Get(next);
+  return unibrow::Utf16::IsSurrogatePair(lead, trail) ? next + 1 : next;
+}
+
+struct Wtf8IteratorElement {
+  uint32_t start;
+  uint32_t end;
+  unibrow::uchar code_point;
+  Wtf8ByteCursor::Status status;
+};
+
+}  // namespace
+
+RUNTIME_FUNCTION(Runtime_StringIteratorNextWtf8) {
+  HandleScope handle_scope(isolate);
+  DCHECK_EQ(1, args.length());
+  DCHECK(v8_flags.utf8_string_semantics);
+
+  DirectHandle<JSStringIterator> iterator = args.at<JSStringIterator>(0);
+  DirectHandle<String> subject(iterator->string(), isolate);
+  const uint32_t index = iterator->index();
+  subject = String::Flatten(isolate, subject);
+  DCHECK_LT(index, static_cast<uint32_t>(subject->length()));
+
+  uint32_t next;
+  Wtf8ByteCursor::Status status = Wtf8ByteCursor::Status::kValid;
+  {
+    DisallowGarbageCollection no_gc;
+    String::FlatContent content = subject->GetFlatContent(no_gc);
+    if (content.IsOneByte()) {
+      Wtf8ByteCursor cursor(content.ToByteVector(),
+                            Wtf8ByteCursor::Policy::kInternalWtf8, index);
+      status = cursor.DecodeNext().status;
+      next = static_cast<uint32_t>(cursor.position());
+    } else {
+      next = Utf16IteratorNextIndex(subject, index);
+    }
+  }
+
+  DirectHandle<String> value;
+  ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
+      isolate, value,
+      NewWtf8IteratorValue(isolate, subject, index, next, status));
+  iterator->set_index(next);
+  return *value;
+}
+
+RUNTIME_FUNCTION(Runtime_StringToListWtf8) {
+  HandleScope handle_scope(isolate);
+  DCHECK_EQ(1, args.length());
+  DCHECK(v8_flags.utf8_string_semantics);
+
+  DirectHandle<String> subject = args.at<String>(0);
+  subject = String::Flatten(isolate, subject);
+  const uint32_t length = subject->length();
+  std::vector<Wtf8IteratorElement> decoded;
+  decoded.reserve(length);
+
+  bool is_one_byte;
+  {
+    DisallowGarbageCollection no_gc;
+    String::FlatContent content = subject->GetFlatContent(no_gc);
+    is_one_byte = content.IsOneByte();
+    if (is_one_byte) {
+      Wtf8ByteCursor cursor(content.ToByteVector(),
+                            Wtf8ByteCursor::Policy::kInternalWtf8);
+      while (cursor.has_next()) {
+        const uint32_t start = static_cast<uint32_t>(cursor.position());
+        Wtf8ByteCursor::Result result = cursor.DecodeNext();
+        decoded.push_back({start, static_cast<uint32_t>(cursor.position()),
+                           result.code_point, result.status});
+      }
+    }
+  }
+
+  DirectHandle<FixedArray> elements =
+      isolate->factory()->NewFixedArray(length);
+  uint32_t count = 0;
+  if (is_one_byte) {
+    for (const Wtf8IteratorElement& element : decoded) {
+      DirectHandle<String> value;
+      if (element.status == Wtf8ByteCursor::Status::kValid &&
+          element.code_point <= unibrow::Utf8::kMaxOneByteChar) {
+        value = direct_handle(ReadOnlyRoots(isolate).single_character_string(
+                                  element.code_point),
+                              isolate);
+      } else {
+        ASSIGN_RETURN_FAILURE_ON_EXCEPTION(
+            isolate, value,
+            NewWtf8IteratorValue(isolate, subject, element.start, element.end,
+                                 element.status));
+      }
+      elements->set(count++, *value);
+    }
+  } else {
+    for (uint32_t index = 0; index < length;) {
+      const uint32_t next = Utf16IteratorNextIndex(subject, index);
+      elements->set(count++,
+                    *isolate->factory()->NewSubString(subject, index, next));
+      index = next;
+    }
+  }
+
+  return *isolate->factory()->NewJSArrayWithElements(
+      elements, PACKED_ELEMENTS, count);
+}
+
 RUNTIME_FUNCTION(Runtime_StringBuilderConcat) {
   HandleScope scope(isolate);
   DCHECK_EQ(3, args.length());

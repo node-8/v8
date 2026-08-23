@@ -34,6 +34,7 @@ class StringBuiltinsAssembler : public CodeStubAssembler {
   TNode<Int32T> LoadSurrogatePairAt(TNode<String> string, TNode<IntPtrT> length,
                                     TNode<IntPtrT> index,
                                     UnicodeEncoding encoding);
+  TNode<BoolT> Utf8StringSemanticsEnabled();
   TNode<BoolT> HasUnpairedSurrogate(TNode<String> string, Label* if_indirect);
 
   void ReplaceUnpairedSurrogates(TNode<String> source, TNode<String> dest,
