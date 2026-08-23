@@ -760,6 +760,15 @@ Handle<String> FactoryBase<Impl>::MakeOrFindTwoCharacterString(uint16_t c1,
     uint8_t buffer[] = {static_cast<uint8_t>(c1), static_cast<uint8_t>(c2)};
     return InternalizeString(base::Vector<const uint8_t>(buffer, 2));
   }
+  if (v8_flags.utf8_string_semantics) {
+    uint8_t bytes[2 * unibrow::Utf8::kMaxEncodedSize];
+    unsigned length = unibrow::Utf8::Encode(
+        reinterpret_cast<char*>(bytes), c1,
+        unibrow::Utf16::kNoPreviousCharacter, false);
+    length += unibrow::Utf8::Encode(reinterpret_cast<char*>(bytes + length),
+                                    c2, c1, false);
+    return InternalizeString(base::Vector<const uint8_t>(bytes, length));
+  }
   uint16_t buffer[] = {c1, c2};
   return InternalizeString(base::Vector<const uint16_t>(buffer, 2));
 }

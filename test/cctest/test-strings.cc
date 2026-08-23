@@ -2170,6 +2170,35 @@ TEST(Node8SingleCharacterFactory) {
   check(0xfffd, {0xef, 0xbf, 0xbd});
 }
 
+TEST(Node8TwoCharacterFactory) {
+  if (!v8_flags.utf8_string_semantics) return;
+  CcTest::InitializeVM();
+  v8::HandleScope handle_scope(CcTest::isolate());
+  Factory* factory = CcTest::i_isolate()->factory();
+
+  const auto check = [factory](uint16_t c1, uint16_t c2,
+                               std::initializer_list<uint8_t> expected) {
+    base::uc16 source_chars[] = {0x61, c1, c2, 0x62};
+    DirectHandle<String> source =
+        factory->NewStringFromTwoByte(base::ArrayVector(source_chars))
+            .ToHandleChecked();
+    DirectHandle<String> string =
+        factory->NewProperSubString(source, 1, 3);
+    CHECK(string->IsOneByteRepresentation());
+    CHECK_EQ(static_cast<uint32_t>(expected.size()), string->length());
+    uint32_t index = 0;
+    for (uint8_t byte : expected) CHECK_EQ(byte, string->Get(index++));
+    CHECK_EQ(*string, *factory->NewProperSubString(source, 1, 3));
+  };
+
+  check(0x00e9, 0x00f1, {0xe9, 0xf1});
+  check(0x4e2d, 0x6587, {0xe4, 0xb8, 0xad, 0xe6, 0x96, 0x87});
+  check(0xd83d, 0xde00, {0xf0, 0x9f, 0x98, 0x80});
+  check(0xd83d, 0x0078, {0xed, 0xa0, 0xbd, 0x78});
+  check(0x0078, 0xdc00, {0x78, 0xed, 0xb0, 0x80});
+  check(0x00e9, 0x4e2d, {0xc3, 0xa9, 0xe4, 0xb8, 0xad});
+}
+
 TEST(CheckIntlSegmentIteratorTerminateExecutionInterrupt) {
 #if V8_INTL_SUPPORT
   // This tag value has been picked arbitrarily between 0 and
