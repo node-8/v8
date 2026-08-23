@@ -5,6 +5,7 @@
 #include "src/objects/intl-objects.h"
 
 #include <algorithm>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -36,6 +37,7 @@
 #include "src/objects/smi.h"
 #include "src/objects/string.h"
 #include "src/strings/string-case.h"
+#include "third_party/utf8-decoder/generalized-utf8-decoder.h"
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wshadow"
 #include "unicode/basictz.h"
@@ -88,6 +90,118 @@ uint32_t from_icu_length(int32_t value) {
   SBXCHECK_LE(0, value);
   return static_cast<uint32_t>(value);
 }
+
+// ICU normalization preserves malformed UTF-8 unchanged. Apply node-8's Web
+// scalar replacement policy while ICU streams its UTF-8 output, without an
+// intermediate UTF-16 string or a separate validation pass.
+class WebScalarUtf8ByteSink final : public icu::ByteSink {
+ public:
+  explicit WebScalarUtf8ByteSink(base::Vector<const uint8_t> source)
+      : source_(source) {}
+
+  void Append(const char* bytes, int32_t length) final {
+    DCHECK_GE(length, 0);
+    const uint8_t* cursor = reinterpret_cast<const uint8_t*>(bytes);
+    const uint8_t* end = cursor + length;
+    if (pending_length_ == 0 &&
+        simdutf::validate_utf8(bytes, static_cast<size_t>(length))) {
+      Emit(cursor, static_cast<size_t>(length));
+      return;
+    }
+    while (cursor < end) ProcessByte(*cursor++);
+  }
+
+  void Flush() final {
+    if (pending_length_ != 0) {
+      EmitReplacement();
+      ResetSequence();
+    }
+  }
+
+  void Finish() {
+    Flush();
+    if (!too_long_ && !changed_ && output_length_ != source_.size()) {
+      changed_ = true;
+      output_.assign(reinterpret_cast<const char*>(source_.begin()),
+                     output_length_);
+    }
+  }
+
+  bool changed() const { return changed_; }
+  bool too_long() const { return too_long_; }
+  std::string TakeOutput() { return std::move(output_); }
+
+ private:
+  void ProcessByte(uint8_t byte) {
+    auto previous_state = state_;
+    GeneralizedUtf8DfaDecoder::Decode(byte, &state_, &current_);
+    if (state_ == GeneralizedUtf8DfaDecoder::kReject) {
+      EmitReplacement();
+      ResetSequence();
+      if (previous_state != GeneralizedUtf8DfaDecoder::kAccept) {
+        ProcessByte(byte);
+      }
+      return;
+    }
+
+    pending_[pending_length_++] = byte;
+    if (state_ != GeneralizedUtf8DfaDecoder::kAccept) return;
+
+    if (current_ >= 0xD800u && current_ <= 0xDFFFu) {
+      EmitReplacement();
+    } else {
+      Emit(pending_, pending_length_);
+    }
+    ResetSequence();
+  }
+
+  void EmitReplacement() {
+    static constexpr uint8_t kReplacementBytes[] = {0xEF, 0xBF, 0xBD};
+    Emit(kReplacementBytes, arraysize(kReplacementBytes));
+  }
+
+  void Emit(const uint8_t* bytes, size_t length) {
+    if (too_long_) return;
+    if (length > static_cast<size_t>(String::kMaxLength) - output_length_) {
+      too_long_ = true;
+      return;
+    }
+
+    if (!changed_) {
+      const bool matches_source =
+          output_length_ + length <= source_.size() &&
+          std::memcmp(source_.begin() + output_length_, bytes, length) == 0;
+      if (matches_source) {
+        output_length_ += length;
+        return;
+      }
+      changed_ = true;
+      output_.reserve(source_.size());
+      output_.append(reinterpret_cast<const char*>(source_.begin()),
+                     output_length_);
+    }
+
+    output_.append(reinterpret_cast<const char*>(bytes), length);
+    output_length_ += length;
+  }
+
+  void ResetSequence() {
+    state_ = GeneralizedUtf8DfaDecoder::kAccept;
+    current_ = 0;
+    pending_length_ = 0;
+  }
+
+  base::Vector<const uint8_t> source_;
+  std::string output_;
+  size_t output_length_ = 0;
+  uint8_t pending_[4];
+  size_t pending_length_ = 0;
+  GeneralizedUtf8DfaDecoder::State state_ =
+      GeneralizedUtf8DfaDecoder::kAccept;
+  uint32_t current_ = 0;
+  bool changed_ = false;
+  bool too_long_ = false;
+};
 
 inline constexpr uint8_t AsOneByte(uint16_t ch) {
   DCHECK_LE(ch, kMaxUInt8);
@@ -2669,18 +2783,73 @@ MaybeDirectHandle<String> Intl::Normalize(Isolate* isolate,
     }
   }
 
-  int32_t length = to_icu_length(string->length());
   string = String::Flatten(isolate, string);
-  icu::UnicodeString result;
-  std::unique_ptr<base::uc16[]> sap;
   UErrorCode status = U_ZERO_ERROR;
-  icu::UnicodeString input = ToICUUnicodeString(isolate, string);
   // Getting a singleton. Should not free it.
   const icu::Normalizer2* normalizer =
       icu::Normalizer2::getInstance(nullptr, form_name, form_mode, status);
   // This should only fail on OOM
   CHECK(U_SUCCESS(status));
   DCHECK_NOT_NULL(normalizer);
+
+  if (v8_flags.utf8_string_semantics) {
+    std::string normalized;
+    bool is_one_byte;
+    bool changed = false;
+    bool too_long = false;
+    {
+      DisallowGarbageCollection no_gc;
+      String::FlatContent content = string->GetFlatContent(no_gc);
+      is_one_byte = content.IsOneByte();
+      if (is_one_byte) {
+        base::Vector<const uint8_t> bytes = content.ToByteVector();
+        icu::StringPiece input(reinterpret_cast<const char*>(bytes.begin()),
+                               to_icu_length(
+                                   static_cast<uint32_t>(bytes.length())));
+        const bool is_ascii =
+            NonAsciiStart(bytes.begin(),
+                          static_cast<uint32_t>(bytes.length())) ==
+            bytes.size();
+        const bool is_normalized =
+            is_ascii || normalizer->isNormalizedUTF8(input, status);
+        const bool is_scalar_utf8 =
+            is_ascii || simdutf::validate_utf8(
+                            input.data(), static_cast<size_t>(input.length()));
+        if (is_normalized && is_scalar_utf8) {
+          // Keep the original String and avoid allocating an unchanged output.
+        } else if (is_scalar_utf8) {
+          icu::StringByteSink<std::string> sink(&normalized);
+          normalizer->normalizeUTF8(0, input, sink, nullptr, status);
+          changed = true;
+          too_long = normalized.size() >
+                     static_cast<size_t>(String::kMaxLength);
+        } else {
+          WebScalarUtf8ByteSink sink(bytes);
+          normalizer->normalizeUTF8(0, input, sink, nullptr, status);
+          sink.Finish();
+          changed = sink.changed();
+          too_long = sink.too_long();
+          if (changed && !too_long) normalized = sink.TakeOutput();
+        }
+      }
+    }
+    if (is_one_byte) {
+      if (U_FAILURE(status)) {
+        THROW_NEW_ERROR(isolate, NewTypeError(MessageTemplate::kIcuError));
+      }
+      if (too_long) {
+        THROW_NEW_ERROR(isolate, NewInvalidStringLengthError());
+      }
+      if (!changed) return string;
+      return isolate->factory()->NewStringFromOneByte(
+          base::Vector<const uint8_t>::cast(base::VectorOf(normalized)));
+    }
+  }
+
+  int32_t length = to_icu_length(string->length());
+  icu::UnicodeString result;
+  std::unique_ptr<base::uc16[]> sap;
+  icu::UnicodeString input = ToICUUnicodeString(isolate, string);
   int32_t normalized_prefix_length =
       normalizer->spanQuickCheckYes(input, status);
   // Quick return if the input is already normalized.
