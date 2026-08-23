@@ -186,7 +186,7 @@ static const constexpr Token::Value one_char_tokens[128] = {
 #undef KEYWORDS
 
 V8_INLINE Token::Value Scanner::ScanIdentifierOrKeyword() {
-  next().literal_chars.Start();
+  next().literal_chars.StartByteString(v8_flags.utf8_string_semantics);
   return ScanIdentifierOrKeywordInner();
 }
 

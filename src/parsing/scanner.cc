@@ -20,6 +20,7 @@
 #include "src/objects/bigint.h"
 #include "src/parsing/parse-info.h"
 #include "src/parsing/scanner-inl.h"
+#include "src/strings/unicode-decoder.h"
 #include "src/zone/zone.h"
 
 namespace v8::internal {
@@ -97,10 +98,51 @@ bool Scanner::BookmarkScope::HasBeenApplied() const {
 Scanner::Scanner(Utf16CharacterStream* source, UnoptimizedCompileFlags flags)
     : flags_(flags),
       source_(source),
+      node8_byte_source_(source->is_node8_byte_source()),
       found_html_comment_(false),
       octal_pos_(Location::invalid()),
       octal_message_(MessageTemplate::kNone) {
   DCHECK_NOT_NULL(source);
+}
+
+base::uc32 Scanner::AdvanceNode8SourceCharacter() {
+  base::uc32 first = source_->Peek();
+  if (first == kEndOfInput) {
+    c0_byte_length_ = 0;
+    return kEndOfInput;
+  }
+  DCHECK_LE(first, std::numeric_limits<uint8_t>::max());
+  if (first <= kMaxAscii) {
+    source_->Advance();
+    c0_byte_length_ = 1;
+    return first;
+  }
+
+  uint8_t bytes[unibrow::Utf8::kMaxEncodedSize];
+  size_t count = 0;
+  while (count < arraysize(bytes)) {
+    base::uc32 next = source_->Peek();
+    if (next == kEndOfInput) break;
+    DCHECK_LE(next, std::numeric_limits<uint8_t>::max());
+    bytes[count++] = static_cast<uint8_t>(source_->Advance());
+  }
+
+  Wtf8ByteCursor cursor(base::Vector<const uint8_t>(bytes, count),
+                        Wtf8ByteCursor::Policy::kInternalWtf8);
+  Wtf8ByteCursor::Result result = cursor.DecodeNext();
+  for (size_t i = result.byte_length; i < count; i++) source_->Back();
+  c0_byte_length_ = result.byte_length;
+  return result.code_point;
+}
+
+base::uc32 Scanner::Peek() {
+  if (V8_LIKELY(!node8_byte_source_)) return source_->Peek();
+  const size_t position = source_->pos();
+  const size_t byte_length = c0_byte_length_;
+  base::uc32 result = AdvanceNode8SourceCharacter();
+  source_->Seek(position);
+  c0_byte_length_ = byte_length;
+  return result;
 }
 
 void Scanner::Initialize() {
@@ -600,7 +642,7 @@ Token::Value Scanner::ScanString() {
 }
 
 Token::Value Scanner::ScanPrivateName() {
-  next().literal_chars.Start();
+  next().literal_chars.StartByteString(v8_flags.utf8_string_semantics);
   DCHECK_EQ(c0_, '#');
   DCHECK(!IsIdentifierStart(kEndOfInput));
   int pos = source_pos();
@@ -1197,7 +1239,7 @@ void Scanner::SeekNext(size_t position) {
   // 2, reset the source to the desired position,
   source_->Seek(position);
   // 3, re-scan, by scanning the look-ahead char + 1 token (next_).
-  c0_ = source_->Advance();
+  c0_ = node8_byte_source_ ? AdvanceNode8SourceCharacter() : source_->Advance();
   next().after_line_terminator = false;
   Scan();
   DCHECK_EQ(next().location.beg_pos, static_cast<int>(position));

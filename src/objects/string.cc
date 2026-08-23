@@ -1113,6 +1113,22 @@ size_t String::WriteUtf8(Isolate* isolate, DirectHandle<String> string,
   FlatContent content = string->GetFlatContent(no_gc);
   DCHECK(content.IsFlat());
 
+  if (v8_flags.utf8_string_semantics && content.IsOneByte()) {
+    const bool null_terminate = flags & Utf8EncodingFlag::kNullTerminate;
+    const size_t payload_capacity = capacity - null_terminate;
+    auto bytes = content.ToOneByteVector();
+    const size_t bytes_to_copy = std::min(bytes.size(), payload_capacity);
+    if (bytes_to_copy > 0) {
+      CopyChars(buffer, reinterpret_cast<const char*>(bytes.begin()),
+                bytes_to_copy);
+    }
+    if (null_terminate) buffer[bytes_to_copy] = '\0';
+    if (processed_characters_return != nullptr) {
+      *processed_characters_return = bytes_to_copy;
+    }
+    return bytes_to_copy + null_terminate;
+  }
+
   auto encoding_result = content.IsOneByte()
                              ? unibrow::Utf8::Encode<uint8_t>(
                                    content.ToOneByteVector(), buffer, capacity,

@@ -13,6 +13,7 @@
 #include "src/base/strings.h"
 #include "src/common/globals.h"
 #include "src/execution/isolate-utils.h"
+#include "src/flags/flags.h"
 #include "src/handles/handles.h"
 #include "src/logging/runtime-call-stats-scope.h"
 #include "src/objects/objects-inl.h"
@@ -276,7 +277,9 @@ class BufferedCharacterStream : public Utf16CharacterStream {
 
  private:
   BufferedCharacterStream(const BufferedCharacterStream<ByteStream>& other)
-      : byte_stream_(other.byte_stream_) {}
+      : byte_stream_(other.byte_stream_) {
+    if (other.is_node8_byte_source()) set_node8_byte_source();
+  }
 
   static const size_t kBufferSize = 512;
   base::uc16 buffer_[kBufferSize];
@@ -884,17 +887,21 @@ Utf16CharacterStream* ScannerStream::For(Isolate* isolate, Handle<String> data,
     data = String::Flatten(isolate, data);
   }
   if (IsExternalOneByteString(*data)) {
-    return new BufferedCharacterStream<ExternalStringStream>(
+    auto* stream = new BufferedCharacterStream<ExternalStringStream>(
         static_cast<size_t>(start_pos), Cast<ExternalOneByteString>(*data),
         start_offset, static_cast<size_t>(end_pos));
+    if (v8_flags.utf8_string_semantics) stream->set_node8_byte_source();
+    return stream;
   } else if (IsExternalTwoByteString(*data)) {
     return new UnbufferedCharacterStream<ExternalStringStream>(
         static_cast<size_t>(start_pos), Cast<ExternalTwoByteString>(*data),
         start_offset, static_cast<size_t>(end_pos));
   } else if (IsSeqOneByteString(*data)) {
-    return new BufferedCharacterStream<OnHeapStream>(
+    auto* stream = new BufferedCharacterStream<OnHeapStream>(
         static_cast<size_t>(start_pos), Cast<SeqOneByteString>(data),
         start_offset, static_cast<size_t>(end_pos));
+    if (v8_flags.utf8_string_semantics) stream->set_node8_byte_source();
+    return stream;
   } else if (IsSeqTwoByteString(*data)) {
     return new RelocatingCharacterStream(
         isolate, static_cast<size_t>(start_pos), Cast<SeqTwoByteString>(data),

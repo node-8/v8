@@ -2199,6 +2199,50 @@ TEST(Node8TwoCharacterFactory) {
   check(0x00e9, 0x4e2d, {0xc3, 0xa9, 0xe4, 0xb8, 0xad});
 }
 
+TEST(Node8ApiNewFromUtf8PreservesBytes) {
+  if (!v8_flags.utf8_string_semantics) return;
+  CcTest::InitializeVM();
+  v8::HandleScope handle_scope(CcTest::isolate());
+
+  const char input[] = {static_cast<char>(0xc3), static_cast<char>(0xa9),
+                        static_cast<char>(0xe2), static_cast<char>(0x28),
+                        static_cast<char>(0xa1)};
+  v8::Local<v8::String> value =
+      v8::String::NewFromUtf8(CcTest::isolate(), input,
+                              v8::NewStringType::kNormal, arraysize(input))
+          .ToLocalChecked();
+  DirectHandle<String> string = v8::Utils::OpenDirectHandle(*value);
+  CHECK(string->IsOneByteRepresentation());
+  CHECK_EQ(arraysize(input), string->length());
+  for (uint32_t i = 0; i < arraysize(input); i++) {
+    CHECK_EQ(static_cast<uint8_t>(input[i]), string->Get(i));
+  }
+
+  CHECK_EQ(arraysize(input), value->Utf8LengthV2(CcTest::isolate()));
+  char output[arraysize(input) + 1] = {};
+  size_t processed = 0;
+  CHECK_EQ(
+      arraysize(output),
+      value->WriteUtf8V2(CcTest::isolate(), output, arraysize(output),
+                         v8::String::WriteFlags::kNullTerminate, &processed));
+  CHECK_EQ(arraysize(input), processed);
+  CHECK_EQ(0, output[arraysize(input)]);
+  for (uint32_t i = 0; i < arraysize(input); i++) {
+    CHECK_EQ(static_cast<uint8_t>(input[i]), static_cast<uint8_t>(output[i]));
+  }
+
+  char truncated[3] = {};
+  CHECK_EQ(
+      arraysize(truncated),
+      value->WriteUtf8V2(CcTest::isolate(), truncated, arraysize(truncated),
+                         v8::String::WriteFlags::kNone, &processed));
+  CHECK_EQ(arraysize(truncated), processed);
+  for (uint32_t i = 0; i < arraysize(truncated); i++) {
+    CHECK_EQ(static_cast<uint8_t>(input[i]),
+             static_cast<uint8_t>(truncated[i]));
+  }
+}
+
 TEST(CheckIntlSegmentIteratorTerminateExecutionInterrupt) {
 #if V8_INTL_SUPPORT
   // This tag value has been picked arbitrarily between 0 and

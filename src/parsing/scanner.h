@@ -142,6 +142,9 @@ class Utf16CharacterStream {
     runtime_call_stats_ = runtime_call_stats;
   }
 
+  bool is_node8_byte_source() const { return is_node8_byte_source_; }
+  void set_node8_byte_source() { is_node8_byte_source_ = true; }
+
  protected:
   Utf16CharacterStream(const uint16_t* buffer_start,
                        const uint16_t* buffer_cursor,
@@ -207,6 +210,7 @@ class Utf16CharacterStream {
   size_t buffer_pos_;
   RuntimeCallStats* runtime_call_stats_ = nullptr;
   bool has_parser_error_ = false;
+  bool is_node8_byte_source_ = false;
 };
 
 // ----------------------------------------------------------------------------
@@ -559,15 +563,35 @@ class V8_EXPORT_PRIVATE Scanner {
     if (capture_raw) {
       AddRawLiteralChar(c0_);
     }
-    c0_ = source_->Advance();
+    if (V8_LIKELY(!node8_byte_source_)) {
+      c0_ = source_->Advance();
+    } else {
+      c0_ = AdvanceNode8SourceCharacter();
+    }
   }
 
   template <typename FunctionType>
   V8_INLINE void AdvanceUntil(FunctionType check) {
-    c0_ = source_->AdvanceUntil(check);
+    if (V8_LIKELY(!node8_byte_source_)) {
+      c0_ = source_->AdvanceUntil(check);
+      return;
+    }
+    while (true) {
+      base::uc32 raw = source_->AdvanceUntil(
+          [&check](base::uc32 c) { return c > kMaxAscii || check(c); });
+      if (raw <= kMaxAscii || raw == kEndOfInput) {
+        c0_ = raw;
+        c0_byte_length_ = 1;
+        return;
+      }
+      source_->Back();
+      c0_ = AdvanceNode8SourceCharacter();
+      if (check(c0_)) return;
+    }
   }
 
   bool CombineSurrogatePair() {
+    if (node8_byte_source_) return false;
     DCHECK(!unibrow::Utf16::IsLeadSurrogate(kEndOfInput));
     if (unibrow::Utf16::IsLeadSurrogate(c0_)) {
       base::uc32 c1 = source_->Advance();
@@ -584,11 +608,18 @@ class V8_EXPORT_PRIVATE Scanner {
   void PushBack(base::uc32 ch) {
     DCHECK(IsInvalid(c0_) ||
            base::IsInRange(c0_, 0u, unibrow::Utf16::kMaxNonSurrogateCharCode));
-    source_->Back();
+    if (node8_byte_source_) {
+      for (size_t i = 0; i < c0_byte_length_; i++) source_->Back();
+      c0_byte_length_ = 1;
+    } else {
+      source_->Back();
+    }
     c0_ = ch;
   }
 
-  base::uc32 Peek() const { return source_->Peek(); }
+  base::uc32 Peek();
+
+  base::uc32 AdvanceNode8SourceCharacter();
 
   inline Token::Value Select(Token::Value tok) {
     Advance();
@@ -724,7 +755,10 @@ class V8_EXPORT_PRIVATE Scanner {
 
   // Return the current source position.
   int source_pos() {
-    return static_cast<int>(source_->pos()) - kCharacterLookaheadBufferSize;
+    if (V8_LIKELY(!node8_byte_source_)) {
+      return static_cast<int>(source_->pos()) - kCharacterLookaheadBufferSize;
+    }
+    return static_cast<int>(source_->pos() - c0_byte_length_);
   }
 
   static bool LiteralContainsEscapes(const TokenDesc& token) {
@@ -758,9 +792,11 @@ class V8_EXPORT_PRIVATE Scanner {
 
   // Input stream. Must be initialized to an Utf16CharacterStream.
   Utf16CharacterStream* const source_;
+  const bool node8_byte_source_;
 
   // One Unicode character look-ahead; c0_ < 0 at the end of the input.
   base::uc32 c0_;
+  size_t c0_byte_length_ = 0;
 
   TokenDesc token_storage_[4];
 

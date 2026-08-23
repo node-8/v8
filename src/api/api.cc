@@ -7436,6 +7436,14 @@ V8_WARN_UNUSED_RESULT
 inline i::MaybeHandle<i::String> NewString(i::Factory* factory,
                                            NewStringType type,
                                            base::Vector<const char> string) {
+  if (i::v8_flags.utf8_string_semantics) {
+    base::Vector<const uint8_t> bytes =
+        base::Vector<const uint8_t>::cast(string);
+    if (type == NewStringType::kInternalized) {
+      return factory->InternalizeString(bytes);
+    }
+    return factory->NewStringFromOneByte(bytes);
+  }
   if (type == NewStringType::kInternalized) {
     return factory->InternalizeUtf8String(string);
   }

@@ -29,6 +29,26 @@ assertEquals(
 assertNotEquals('\xE9', '\u00E9');
 assertSame('é', 'é');
 
+const 变量 = 39;
+assertEquals(42, 变量 + '中'.length);
+
+function 计算(输入) { return 输入 + '中'; }
+assertEquals('7中', 计算(7));
+assertEquals(
+    "function 计算(输入) { return 输入 + '中'; }", 计算.toString());
+
+assertEquals(42, eval('const 临时 = 40; 临时 + 2;'));
+const 动态函数 = Function('值', 'return 值 + "中".length;');
+assertEquals(4, 动态函数(1));
+class 私有字段测试 {
+  #值 = 40;
+  读取() { return this.#值 + 2; }
+}
+assertEquals(42, new 私有字段测试().读取());
+assertEquals(
+    2,
+    eval('let 行 = 1; // 注释' + String.fromCodePoint(0x2028) + '行 + 1;'));
+
 // Temporary compatibility boundary: the legacy RegExp parser decodes a
 // non-ASCII byte pattern once without creating a UTF-16 heap String.
 assertDoesNotThrow(() => new RegExp('\u00E9'));

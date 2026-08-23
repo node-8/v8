@@ -1217,6 +1217,7 @@ size_t String::Utf8Length(Isolate* isolate, DirectHandle<String> string) {
   DCHECK(content.IsFlat());
   if (content.IsOneByte()) {
     auto vec = content.ToOneByteVector();
+    if (v8_flags.utf8_string_semantics) return vec.size();
     return simdutf::utf8_length_from_latin1(
         reinterpret_cast<const char*>(vec.begin()), vec.size());
   }
