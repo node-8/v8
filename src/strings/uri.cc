@@ -628,6 +628,44 @@ MaybeHandle<String> UnescapeSlow(Isolate* isolate, DirectHandle<String> string,
   return isolate->factory()->NewConsString(first_part, second_part);
 }
 
+void AppendWtf8CodeUnit(uint16_t code_unit, std::vector<uint8_t>* output) {
+  if (code_unit <= 0x7F) {
+    output->push_back(static_cast<uint8_t>(code_unit));
+  } else if (code_unit <= 0x7FF) {
+    output->push_back(static_cast<uint8_t>(0xC0 | (code_unit >> 6)));
+    output->push_back(static_cast<uint8_t>(0x80 | (code_unit & 0x3F)));
+  } else {
+    output->push_back(static_cast<uint8_t>(0xE0 | (code_unit >> 12)));
+    output->push_back(static_cast<uint8_t>(0x80 | ((code_unit >> 6) & 0x3F)));
+    output->push_back(static_cast<uint8_t>(0x80 | (code_unit & 0x3F)));
+  }
+}
+
+MaybeHandle<String> UnescapeNode8(Isolate* isolate,
+                                  DirectHandle<String> string) {
+  std::vector<uint8_t> output;
+  {
+    DisallowGarbageCollection no_gc;
+    base::Vector<const uint8_t> bytes = string->GetCharVector<uint8_t>(no_gc);
+    const uint8_t* first_percent = static_cast<const uint8_t*>(
+        std::memchr(bytes.begin(), '%', bytes.size()));
+    if (first_percent == nullptr) return indirect_handle(string, isolate);
+
+    output.reserve(bytes.size());
+    for (int index = 0; index < bytes.length();) {
+      int step;
+      int decoded = UnescapeChar(bytes, index, bytes.length(), &step);
+      if (step == 6) {
+        AppendWtf8CodeUnit(static_cast<uint16_t>(decoded), &output);
+      } else {
+        output.push_back(static_cast<uint8_t>(decoded));
+      }
+      index += step;
+    }
+  }
+  return isolate->factory()->NewStringFromOneByte(base::VectorOf(output));
+}
+
 bool IsNotEscaped(uint16_t c) {
   if (IsAlphaNumeric(c)) {
     return true;
@@ -740,6 +778,14 @@ MaybeDirectHandle<String> Uri::Escape(Isolate* isolate, Handle<String> string) {
 MaybeDirectHandle<String> Uri::Unescape(Isolate* isolate,
                                         Handle<String> string) {
   string = String::Flatten(isolate, string);
+  if (v8_flags.utf8_string_semantics) {
+    bool is_one_byte;
+    {
+      DisallowGarbageCollection no_gc;
+      is_one_byte = string->GetFlatContent(no_gc).IsOneByte();
+    }
+    if (is_one_byte) return UnescapeNode8(isolate, string);
+  }
   return String::IsOneByteRepresentationUnderneath(*string)
              ? UnescapePrivate<uint8_t>(isolate, string)
              : UnescapePrivate<base::uc16>(isolate, string);

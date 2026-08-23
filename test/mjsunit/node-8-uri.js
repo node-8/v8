@@ -54,3 +54,15 @@ for (const malformedBytes of [
       () => encodeURIComponent(String.fromCharCode(...malformedBytes)),
       URIError);
 }
+
+assertEquals('%C3%A9', escape('\u00e9'));
+assertEquals('%E4%B8%AD', escape('\u4e2d'));
+assertEquals('%F0%9F%98%80', escape('\ud83d\ude00'));
+assertEquals([0xe4, 0xb8, 0xad], bytes(unescape('%u4E2D')));
+assertEquals([0xed, 0xa0, 0x80], bytes(unescape('%uD800')));
+assertEquals(
+    [0xed, 0xa0, 0xbd, 0xed, 0xb8, 0x80],
+    bytes(unescape('%uD83D%uDE00')));
+for (const value of ['ASCII', '\u00e9', '\u4e2d\u6587', '\ud83d\ude00']) {
+  assertEquals(value, unescape(escape(value)));
+}
