@@ -166,6 +166,23 @@ preserves lone surrogates.
 `isWellFormed()` accepts only scalar-value UTF-8. `toWellFormed()` replaces
 malformed subsequences and WTF-8 surrogates and emits canonical UTF-8.
 
+### JSON boundary
+
+JSON syntax remains strict ASCII syntax, but JSON String payloads follow the
+byte-preserving contract:
+
+- `JSON.parse` preserves unescaped stored bytes without validation;
+- JSON Unicode escapes are encoded directly as UTF-8/WTF-8, and an adjacent
+  escaped surrogate pair is combined into one scalar encoding;
+- `JSON.stringify` escapes JSON syntax characters and WTF-8 surrogate values,
+  while preserving other stored bytes without validation or replacement.
+
+Consequently, stringifying a raw String is not a UTF-8 validator and may emit
+non-scalar JSON bytes. Code that requires interoperable scalar-value JSON must
+validate or call `toWellFormed()` at that boundary. This rule avoids an
+implicit full-string validation pass and preserves `parse`/`stringify` byte
+closure for ordinary malformed input.
+
 ## 9. Runtime and embedding boundaries
 
 ### D14: Node output boundaries
