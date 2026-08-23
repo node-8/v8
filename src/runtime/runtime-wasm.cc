@@ -2735,14 +2735,34 @@ RUNTIME_FUNCTION(Runtime_WasmStringFromCodePoint) {
   HandleScope scope(isolate);
 
   uint32_t code_point = NumberToUint32(args[0]);
-  if (code_point <= unibrow::Utf16::kMaxNonSurrogateCharCode) {
-    return *isolate->factory()->LookupSingleCharacterStringFromCode(code_point);
-  }
   if (code_point > 0x10FFFF) {
     // Allocate a new number to preserve the to-uint conversion (e.g. if
     // args[0] == -1, we want the error message to report 4294967295).
     return ThrowWasmError(isolate, MessageTemplate::kInvalidCodePoint,
                           {isolate->factory()->NewNumberFromUint(code_point)});
+  }
+
+  if (v8_flags.utf8_string_semantics) {
+    if (code_point <= unibrow::Utf8::kMaxOneByteChar) {
+      return *isolate->factory()->LookupSingleCharacterStringFromCode(
+          code_point);
+    }
+    base::uc16 char_buffer[2];
+    size_t length = 1;
+    if (code_point <= unibrow::Utf16::kMaxNonSurrogateCharCode) {
+      char_buffer[0] = static_cast<base::uc16>(code_point);
+    } else {
+      char_buffer[0] = unibrow::Utf16::LeadSurrogate(code_point);
+      char_buffer[1] = unibrow::Utf16::TrailSurrogate(code_point);
+      length = 2;
+    }
+    return *isolate->factory()
+                ->NewStringFromTwoByte({char_buffer, length})
+                .ToHandleChecked();
+  }
+
+  if (code_point <= unibrow::Utf16::kMaxNonSurrogateCharCode) {
+    return *isolate->factory()->LookupSingleCharacterStringFromCode(code_point);
   }
 
   base::uc16 char_buffer[] = {

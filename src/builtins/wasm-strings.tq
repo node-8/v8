@@ -6,6 +6,9 @@
 // of the "JS String Builtins", i.e. from Liftoff code, and for exported
 // functions.
 
+extern macro WasmBuiltinsAssembler::ImportedStringsUtf8StringSemanticsEnabled():
+    bool;
+
 macro Trap(context: Context, error: constexpr MessageTemplate): never {
   runtime::ThrowWasmError(context, SmiConstant(error));
 }
@@ -96,6 +99,10 @@ transitioning javascript builtin WebAssemblyStringToWtf16Array(
 transitioning javascript builtin WebAssemblyStringFromCharCode(
     js-implicit context: Context)(codeArg: JSAny): JSAny {
   const code = NumberToUint32(ToNumber_Inline(codeArg));
+  if (ImportedStringsUtf8StringSemanticsEnabled()) {
+    return runtime::WasmStringFromCodePoint(
+        context, ChangeUint32ToTagged(code & 0xFFFF));
+  }
   return StringFromSingleCharCode(%RawDownCast<char16>(code & 0xFFFF));
 }
 
@@ -103,6 +110,9 @@ transitioning javascript builtin WebAssemblyStringFromCodePoint(
     js-implicit context: Context)(codeArg: JSAny): JSAny {
   const code = ToNumber_Inline(codeArg);
   const codeUint = NumberToUint32(code);
+  if (ImportedStringsUtf8StringSemanticsEnabled()) {
+    return runtime::WasmStringFromCodePoint(context, code);
+  }
   if (codeUint <= 0xFFFF) {
     return StringFromSingleCharCode(%RawDownCast<char16>(codeUint));
   }

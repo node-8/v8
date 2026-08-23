@@ -229,6 +229,11 @@ TNode<BoolT> WasmBuiltinsAssembler::Utf8StringSemanticsEnabled() {
       ExternalReference::address_of_utf8_string_semantics_flag());
 }
 
+TNode<BoolT>
+WasmBuiltinsAssembler::ImportedStringsUtf8StringSemanticsEnabled() {
+  return Utf8StringSemanticsEnabled();
+}
+
 #include "src/codegen/undef-code-stub-assembler-macros.inc"
 
 }  // namespace v8::internal

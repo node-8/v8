@@ -41,6 +41,7 @@ class WasmBuiltinsAssembler : public CodeStubAssembler {
   TNode<BoolT> InSharedSpace(TNode<HeapObject>);
 
   TNode<BoolT> Utf8StringSemanticsEnabled();
+  TNode<BoolT> ImportedStringsUtf8StringSemanticsEnabled();
 };
 
 }  // namespace internal
