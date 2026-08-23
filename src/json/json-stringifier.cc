@@ -27,6 +27,7 @@
 #include "src/objects/smi.h"
 #include "src/objects/tagged.h"
 #include "src/strings/string-builder-inl.h"
+#include "src/strings/unicode.h"
 
 namespace v8 {
 namespace internal {
@@ -565,6 +566,33 @@ bool SerializeNode8JsonString(base::Vector<const uint8_t> bytes, size_t start,
                               AppendCString append_c_string) {
   bool required_escaping = false;
   size_t index = start;
+  if (unibrow::Utf8::ValidateEncoding(bytes.begin(), bytes.size())) {
+    while (index < bytes.size()) {
+      if (index + sizeof(uint32_t) <= bytes.size()) {
+        uint32_t packed;
+        std::memcpy(&packed, bytes.begin() + index, sizeof(packed));
+        if (!NeedsEscape(packed)) {
+          index += sizeof(packed);
+          continue;
+        }
+      }
+
+      uint8_t byte = bytes[index];
+      if (DoNotEscape(byte)) {
+        index++;
+        continue;
+      }
+      required_escaping = true;
+      append_bytes(bytes.begin() + uncopied_src_index,
+                   index - uncopied_src_index);
+      append_c_string(&JsonEscapeTable[byte * kJsonEscapeTableEntrySize]);
+      uncopied_src_index = ++index;
+    }
+    append_bytes(bytes.begin() + uncopied_src_index,
+                 bytes.size() - uncopied_src_index);
+    return required_escaping;
+  }
+
   while (index < bytes.size()) {
     if (index + sizeof(uint32_t) <= bytes.size()) {
       uint32_t packed;
