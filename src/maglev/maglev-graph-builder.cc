@@ -9515,6 +9515,13 @@ MaybeReduceResult MaglevGraphBuilder::TryReduceStringFromCharCode(
   ValueNode* value;
   GET_VALUE_OR_ABORT(
       value, GetTruncatedInt32ForToNumber(args[0], NodeType::kNumberOrOddball));
+  if (v8_flags.utf8_string_semantics) {
+    ValueNode* masked_value;
+    GET_VALUE_OR_ABORT(
+        masked_value,
+        AddNewNode<Int32BitwiseAnd>({value, GetInt32Constant(0xFF)}));
+    value = masked_value;
+  }
   return AddNewNode<BuiltinStringFromCharCode>({value});
 }
 

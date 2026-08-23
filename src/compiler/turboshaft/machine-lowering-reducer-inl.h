@@ -3865,6 +3865,10 @@ class MachineLoweringReducer : public Next {
   V<String> StringFromSingleCharCode(V<Word32> code) {
     Label<String> done(this);
 
+    if (v8_flags.utf8_string_semantics) {
+      code = __ Word32BitwiseAnd(code, String::kMaxOneByteCharCode);
+    }
+
     // Check if the {code} is a one byte character.
     IF (LIKELY(__ Uint32LessThanOrEqual(code, String::kMaxOneByteCharCode))) {
       // Load the string for the {code} directly from the roots table.
@@ -3890,6 +3894,71 @@ class MachineLoweringReducer : public Next {
 
   V<String> StringFromSingleCodePoint(V<Word32> codepoint,
                                       UnicodeEncoding encoding) {
+    if (v8_flags.utf8_string_semantics &&
+        encoding == UnicodeEncoding::UTF32) {
+      Label<String> node8_done(this);
+      IF (LIKELY(__ Uint32LessThanOrEqual(codepoint, 0x7F))) {
+        GOTO(node8_done, StringFromSingleCharCode(codepoint));
+      } ELSE IF (__ Uint32LessThanOrEqual(codepoint, 0x7FF)) {
+        Uninitialized<SeqOneByteString> string =
+            AllocateSeqOneByteString(2, AllocationType::kYoung);
+        auto access = AccessBuilderTS::ForSeqOneByteStringCharacter();
+        __ InitializeElement(
+            string, access, 0,
+            __ Word32BitwiseOr(__ Word32ShiftRightLogical(codepoint, 6),
+                               0xC0));
+        __ InitializeElement(
+            string, access, 1,
+            __ Word32BitwiseOr(__ Word32BitwiseAnd(codepoint, 0x3F), 0x80));
+        GOTO(node8_done, __ FinishInitialization(std::move(string)));
+      } ELSE IF (__ Uint32LessThanOrEqual(codepoint, 0xFFFF)) {
+        Uninitialized<SeqOneByteString> string =
+            AllocateSeqOneByteString(3, AllocationType::kYoung);
+        auto access = AccessBuilderTS::ForSeqOneByteStringCharacter();
+        __ InitializeElement(
+            string, access, 0,
+            __ Word32BitwiseOr(__ Word32ShiftRightLogical(codepoint, 12),
+                               0xE0));
+        __ InitializeElement(
+            string, access, 1,
+            __ Word32BitwiseOr(
+                __ Word32BitwiseAnd(
+                    __ Word32ShiftRightLogical(codepoint, 6), 0x3F),
+                0x80));
+        __ InitializeElement(
+            string, access, 2,
+            __ Word32BitwiseOr(__ Word32BitwiseAnd(codepoint, 0x3F), 0x80));
+        GOTO(node8_done, __ FinishInitialization(std::move(string)));
+      } ELSE {
+        Uninitialized<SeqOneByteString> string =
+            AllocateSeqOneByteString(4, AllocationType::kYoung);
+        auto access = AccessBuilderTS::ForSeqOneByteStringCharacter();
+        __ InitializeElement(
+            string, access, 0,
+            __ Word32BitwiseOr(__ Word32ShiftRightLogical(codepoint, 18),
+                               0xF0));
+        __ InitializeElement(
+            string, access, 1,
+            __ Word32BitwiseOr(
+                __ Word32BitwiseAnd(
+                    __ Word32ShiftRightLogical(codepoint, 12), 0x3F),
+                0x80));
+        __ InitializeElement(
+            string, access, 2,
+            __ Word32BitwiseOr(
+                __ Word32BitwiseAnd(
+                    __ Word32ShiftRightLogical(codepoint, 6), 0x3F),
+                0x80));
+        __ InitializeElement(
+            string, access, 3,
+            __ Word32BitwiseOr(__ Word32BitwiseAnd(codepoint, 0x3F), 0x80));
+        GOTO(node8_done, __ FinishInitialization(std::move(string)));
+      }
+
+      BIND(node8_done, result);
+      return result;
+    }
+
     Label<String> done(this);
     // Check if the input is a single code unit.
     GOTO_IF(LIKELY(__ Uint32LessThan(codepoint, 0x10000)), done,
@@ -3933,6 +4002,29 @@ class MachineLoweringReducer : public Next {
 
     BIND(done, result);
     return result;
+  }
+
+  Uninitialized<SeqOneByteString> AllocateSeqOneByteString(
+      uint32_t length, AllocationType type) {
+    __ CodeComment("AllocateSeqOneByteString");
+    DCHECK_GT(length, 0);
+    Uninitialized<SeqOneByteString> string =
+        __ template Allocate<SeqOneByteString>(
+            SeqOneByteString::SizeFor(length), type, kTaggedAligned);
+    __ Initialize(string,
+#if V8_COMPRESS_POINTERS
+                  __ Word32Constant(0), MemoryRepresentation::Uint32(),
+#else
+                  __ WordPtrConstant(0), MemoryRepresentation::UintPtr(),
+#endif
+                  WriteBarrierKind::kNoWriteBarrier,
+                  SeqOneByteString::SizeFor(length) - kObjectAlignment);
+    __ InitializeField(string, AccessBuilderTS::ForMap(),
+                       __ SeqOneByteStringMapConstant());
+    __ InitializeField(string, AccessBuilderTS::ForStringLength(), length);
+    __ InitializeField(string, AccessBuilderTS::ForNameRawHashField(),
+                       Name::kEmptyHashField);
+    return string;
   }
 
   Uninitialized<SeqTwoByteString> AllocateSeqTwoByteString(
