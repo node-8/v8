@@ -280,45 +280,191 @@ std::optional<base::uc32> GetSingletonClassCodePoint(RegExpTree* tree,
   return range.from();
 }
 
-RegExpTree* GetPositiveSingletonClassByteTree(RegExpTree* tree,
-                                              RegExpFlags flags, Zone* zone) {
+struct Node8ByteRange {
+  uint8_t from;
+  uint8_t to;
+};
+
+struct Node8ByteSequence {
+  Node8ByteRange bytes[unibrow::Utf8::kMaxEncodedSize];
+  int length;
+};
+
+constexpr size_t kMaxNode8ClassAlternatives = 128;
+
+bool AddNode8ByteSequence(const Node8ByteSequence& sequence,
+                          ZoneVector<Node8ByteSequence>* output) {
+  if (output->size() >= kMaxNode8ClassAlternatives) return false;
+  output->push_back(sequence);
+  return true;
+}
+
+// Split one lexicographic interval of equally-sized UTF-8 encodings into
+// products of independent byte ranges.
+bool AddNode8ByteInterval(const uint8_t* lower, const uint8_t* upper,
+                          int length, int position,
+                          Node8ByteSequence sequence,
+                          ZoneVector<Node8ByteSequence>* output) {
+  if (position == length) {
+    return AddNode8ByteSequence(sequence, output);
+  }
+
+  bool lower_suffix_is_min = true;
+  bool upper_suffix_is_max = true;
+  for (int i = position + 1; i < length; ++i) {
+    lower_suffix_is_min &= lower[i] == 0x80;
+    upper_suffix_is_max &= upper[i] == 0xbf;
+  }
+  if (lower_suffix_is_min && upper_suffix_is_max) {
+    sequence.bytes[position] = {lower[position], upper[position]};
+    for (int i = position + 1; i < length; ++i) {
+      sequence.bytes[i] = {0x80, 0xbf};
+    }
+    return AddNode8ByteSequence(sequence, output);
+  }
+
+  if (lower[position] == upper[position]) {
+    sequence.bytes[position] = {lower[position], lower[position]};
+    return AddNode8ByteInterval(lower, upper, length, position + 1, sequence,
+                                output);
+  }
+
+  uint8_t lower_upper[unibrow::Utf8::kMaxEncodedSize];
+  for (int i = 0; i < length; ++i) {
+    lower_upper[i] = i <= position ? lower[i] : 0xbf;
+  }
+  sequence.bytes[position] = {lower[position], lower[position]};
+  if (!AddNode8ByteInterval(lower, lower_upper, length, position + 1,
+                            sequence, output)) {
+    return false;
+  }
+
+  if (lower[position] + 1 < upper[position]) {
+    sequence.bytes[position] = {static_cast<uint8_t>(lower[position] + 1),
+                                static_cast<uint8_t>(upper[position] - 1)};
+    for (int i = position + 1; i < length; ++i) {
+      sequence.bytes[i] = {0x80, 0xbf};
+    }
+    if (!AddNode8ByteSequence(sequence, output)) return false;
+  }
+
+  uint8_t upper_lower[unibrow::Utf8::kMaxEncodedSize];
+  for (int i = 0; i < length; ++i) {
+    upper_lower[i] = i <= position ? upper[i] : 0x80;
+  }
+  sequence.bytes[position] = {upper[position], upper[position]};
+  return AddNode8ByteInterval(upper_lower, upper, length, position + 1,
+                              sequence, output);
+}
+
+bool AddNode8CodePointRange(CharacterRange range,
+                            ZoneVector<Node8ByteSequence>* output) {
+  struct EncodingRange {
+    base::uc32 from;
+    base::uc32 to;
+  };
+  static constexpr EncodingRange kEncodingRanges[] = {
+      {0, 0x7f}, {0x80, 0x7ff}, {0x800, 0xffff}, {0x10000, 0x10ffff}};
+  // UTF-8 encodings are lexicographically ordered within each byte length.
+  for (EncodingRange encoding_range : kEncodingRanges) {
+    base::uc32 from = std::max(range.from(), encoding_range.from);
+    base::uc32 to = std::min(range.to(), encoding_range.to);
+    if (from > to) continue;
+
+    char lower_chars[unibrow::Utf8::kMaxEncodedSize];
+    char upper_chars[unibrow::Utf8::kMaxEncodedSize];
+    unsigned length = unibrow::Utf8::Encode(
+        lower_chars, from, unibrow::Utf16::kNoPreviousCharacter, false);
+    unsigned upper_length = unibrow::Utf8::Encode(
+        upper_chars, to, unibrow::Utf16::kNoPreviousCharacter, false);
+    CHECK_EQ(length, upper_length);
+    uint8_t lower[unibrow::Utf8::kMaxEncodedSize];
+    uint8_t upper[unibrow::Utf8::kMaxEncodedSize];
+    for (unsigned i = 0; i < length; ++i) {
+      lower[i] = static_cast<uint8_t>(lower_chars[i]);
+      upper[i] = static_cast<uint8_t>(upper_chars[i]);
+    }
+    Node8ByteSequence sequence{};
+    sequence.length = static_cast<int>(length);
+    if (!AddNode8ByteInterval(lower, upper, sequence.length, 0, sequence,
+                              output)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+RegExpTree* NewNode8ByteSequenceTree(const Node8ByteSequence& sequence,
+                                     Zone* zone) {
+  ZoneList<RegExpTree*>* nodes =
+      zone->New<ZoneList<RegExpTree*>>(sequence.length, zone);
+  int position = 0;
+  while (position < sequence.length) {
+    if (sequence.bytes[position].from == sequence.bytes[position].to) {
+      int run_start = position;
+      while (position < sequence.length &&
+             sequence.bytes[position].from == sequence.bytes[position].to) {
+        ++position;
+      }
+      int run_length = position - run_start;
+      base::Vector<base::uc16> atom =
+          zone->AllocateVector<base::uc16>(run_length);
+      for (int i = 0; i < run_length; ++i) {
+        atom[i] = sequence.bytes[run_start + i].from;
+      }
+      nodes->Add(zone->New<RegExpAtom>(base::Vector<const base::uc16>(
+                     atom.data(), atom.length())),
+                 zone);
+      continue;
+    }
+
+    ZoneList<CharacterRange>* ranges = CharacterRange::List(
+        zone, CharacterRange::Range(sequence.bytes[position].from,
+                                    sequence.bytes[position].to));
+    nodes->Add(zone->New<RegExpClassRanges>(
+                   zone, ranges,
+                   RegExpClassRanges::IS_CERTAINLY_ONE_CODE_POINT),
+               zone);
+    ++position;
+  }
+  if (nodes->length() == 1) return nodes->first();
+  return zone->New<RegExpAlternative>(nodes);
+}
+
+RegExpTree* GetPositiveClassByteTree(RegExpTree* tree, RegExpFlags flags,
+                                     Zone* zone) {
   if (!tree->IsClassRanges()) return nullptr;
   RegExpClassRanges* character_class = tree->AsClassRanges();
   if (character_class->is_negated()) return nullptr;
   ZoneList<CharacterRange>* ranges = character_class->ranges(zone);
-  static constexpr int kMaxAlternatives = 64;
-  if (ranges->length() < 2 || ranges->length() > kMaxAlternatives) {
-    return nullptr;
-  }
+  CharacterRange::Canonicalize(ranges);
+  if (ranges->is_empty()) return nullptr;
 
   bool contains_non_ascii = false;
   for (CharacterRange range : *ranges) {
-    if (!range.IsSingleton() || range.from() == unibrow::Utf8::kBadChar) {
+    // Matching U+FFFD also requires the malformed-subpart decoder fallback.
+    if (range.Contains(unibrow::Utf8::kBadChar)) return nullptr;
+    // Legacy syntax can split one supplementary literal into two surrogates.
+    if (!IsEitherUnicode(flags) && range.from() <= 0xdfff &&
+        range.to() >= 0xd800) {
       return nullptr;
     }
-    if (!IsEitherUnicode(flags) &&
-        (unibrow::Utf16::IsLeadSurrogate(range.from()) ||
-         unibrow::Utf16::IsTrailSurrogate(range.from()))) {
-      return nullptr;
-    }
-    contains_non_ascii |= range.from() > unibrow::Utf8::kMaxOneByteChar;
+    contains_non_ascii |= range.to() > unibrow::Utf8::kMaxOneByteChar;
   }
   if (!contains_non_ascii) return nullptr;
 
-  ZoneList<RegExpTree*>* alternatives =
-      zone->New<ZoneList<RegExpTree*>>(ranges->length(), zone);
+  ZoneVector<Node8ByteSequence> sequences(zone);
   for (CharacterRange range : *ranges) {
-    char bytes[unibrow::Utf8::kMaxEncodedSize];
-    unsigned length = unibrow::Utf8::Encode(
-        bytes, range.from(), unibrow::Utf16::kNoPreviousCharacter, false);
-    base::Vector<base::uc16> atom = zone->AllocateVector<base::uc16>(length);
-    for (unsigned i = 0; i < length; ++i) {
-      atom[i] = static_cast<uint8_t>(bytes[i]);
-    }
-    alternatives->Add(zone->New<RegExpAtom>(base::Vector<const base::uc16>(
-                          atom.data(), atom.length())),
-                      zone);
+    if (!AddNode8CodePointRange(range, &sequences)) return nullptr;
   }
+
+  ZoneList<RegExpTree*>* alternatives =
+      zone->New<ZoneList<RegExpTree*>>(static_cast<int>(sequences.size()),
+                                      zone);
+  for (const Node8ByteSequence& sequence : sequences) {
+    alternatives->Add(NewNode8ByteSequenceTree(sequence, zone), zone);
+  }
+  if (alternatives->length() == 1) return alternatives->first();
   return zone->New<RegExpDisjunction>(alternatives);
 }
 
@@ -421,11 +567,10 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
     }
   } else if (v8_flags.utf8_string_semantics && !IsIgnoreCase(flags) &&
              !IsSticky(flags) && parse_result.capture_count == 0 &&
-             parse_result.tree->IsClassRanges() &&
-             !ContainsMalformedNode8Bytes(pattern)) {
+             parse_result.tree->IsClassRanges()) {
     std::optional<base::uc32> code_point =
         GetSingletonClassCodePoint(parse_result.tree, &zone);
-    if (code_point.has_value()) {
+    if (code_point.has_value() && !ContainsMalformedNode8Bytes(pattern)) {
       DirectHandle<String> atom_string;
       ASSIGN_RETURN_ON_EXCEPTION(
           isolate, atom_string,
@@ -915,11 +1060,10 @@ bool RegExpImpl::CompileIrregexpFromSource(
 
   if (v8_flags.utf8_string_semantics && is_one_byte &&
       !IsIgnoreCase(flags) && !IsSticky(flags) &&
-      compile_data.capture_count == 0 && compile_data.tree->IsClassRanges() &&
-      !ContainsMalformedNode8Bytes(pattern)) {
-    if (RegExpTree* byte_tree = GetPositiveSingletonClassByteTree(
-            compile_data.tree, flags, &zone)) {
-      compile_data.tree = byte_tree;
+      compile_data.capture_count == 0 && compile_data.tree->IsClassRanges()) {
+    if (RegExpTree* byte_tree =
+            GetPositiveClassByteTree(compile_data.tree, flags, &zone)) {
+      if (!ContainsMalformedNode8Bytes(pattern)) compile_data.tree = byte_tree;
     }
   }
 
