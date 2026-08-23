@@ -149,6 +149,7 @@ extern macro WasmBuiltinsAssembler::LoadContextFromWasmOrJsFrame():
 extern macro WasmBuiltinsAssembler::StringToFloat64(String): float64;
 
 extern macro WasmBuiltinsAssembler::InSharedSpace(HeapObject): bool;
+extern macro WasmBuiltinsAssembler::Utf8StringSemanticsEnabled(): bool;
 
 extern macro SwitchToTheCentralStackIfNeeded(): RawPtr;
 extern macro SwitchFromTheCentralStack(RawPtr): void;
@@ -1111,6 +1112,7 @@ builtin WasmStringNewWtf16Array(array: WasmArray, start: uint32, end: uint32):
     if (end < start) goto OffsetOutOfRange;
     const length: uint32 = end - start;
     if (length == 0) return kEmptyString;
+    if (Utf8StringSemanticsEnabled()) goto Runtime;
     if (length == 1) {
       const offset = kWasmArrayHeaderSize +
           torque_internal::TimesSizeOf<char16>(Convert<intptr>(start));

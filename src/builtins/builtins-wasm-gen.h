@@ -39,6 +39,8 @@ class WasmBuiltinsAssembler : public CodeStubAssembler {
   TNode<Float64T> StringToFloat64(TNode<String>);
 
   TNode<BoolT> InSharedSpace(TNode<HeapObject>);
+
+  TNode<BoolT> Utf8StringSemanticsEnabled();
 };
 
 }  // namespace internal

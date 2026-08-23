@@ -842,6 +842,34 @@ MaybeDirectHandle<String> Factory::NewStringFromUtf16(
         reinterpret_cast<const uint16_t*>(array->ElementAddress(0));
     return {contents + start, end - start};
   };
+  if (v8_flags.utf8_string_semantics) {
+    size_t byte_length = 0;
+    int previous = unibrow::Utf16::kNoPreviousCharacter;
+    for (uint16_t code_unit : peek_bytes()) {
+      byte_length += unibrow::Utf8::Length(code_unit, previous);
+      if (byte_length > static_cast<size_t>(String::kMaxLength)) {
+        THROW_NEW_ERROR(isolate(), NewInvalidStringLengthError());
+      }
+      previous = code_unit;
+    }
+
+    Handle<SeqOneByteString> result;
+    ASSIGN_RETURN_ON_EXCEPTION(
+        isolate(), result,
+        NewRawOneByteString(static_cast<int>(byte_length), allocation));
+    DisallowGarbageCollection no_gc;
+    uint8_t* output = result->GetChars(no_gc);
+    size_t output_offset = 0;
+    previous = unibrow::Utf16::kNoPreviousCharacter;
+    for (uint16_t code_unit : peek_bytes()) {
+      output_offset +=
+          unibrow::Utf8::Encode(reinterpret_cast<char*>(output + output_offset),
+                                code_unit, previous, false);
+      previous = code_unit;
+    }
+    DCHECK_EQ(byte_length, output_offset);
+    return result;
+  }
   return NewStringFromBytes<Wtf16Decoder>(isolate(), peek_bytes, allocation,
                                           MessageTemplate::kNone);
 }

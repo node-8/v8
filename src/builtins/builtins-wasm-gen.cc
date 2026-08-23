@@ -224,6 +224,11 @@ TNode<BoolT> WasmBuiltinsAssembler::InSharedSpace(TNode<HeapObject> object) {
   return IsPageFlagSet(address, MemoryChunk::kInSharedHeap);
 }
 
+TNode<BoolT> WasmBuiltinsAssembler::Utf8StringSemanticsEnabled() {
+  return LoadRuntimeFlag(
+      ExternalReference::address_of_utf8_string_semantics_flag());
+}
+
 #include "src/codegen/undef-code-stub-assembler-macros.inc"
 
 }  // namespace v8::internal
