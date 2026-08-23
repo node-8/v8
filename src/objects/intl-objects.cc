@@ -43,6 +43,7 @@
 #include "unicode/basictz.h"
 #include "unicode/brkiter.h"
 #include "unicode/calendar.h"
+#include "unicode/casemap.h"
 #include "unicode/coll.h"
 #include "unicode/datefmt.h"
 #include "unicode/decimfmt.h"
@@ -403,6 +404,47 @@ icu::StringPiece ToICUStringPiece(Isolate* isolate, DirectHandle<String> string,
 
 MaybeHandle<String> LocaleConvertCase(Isolate* isolate, DirectHandle<String> s,
                                       bool is_to_upper, const char* lang) {
+  if (v8_flags.utf8_string_semantics) {
+    s = String::Flatten(isolate, s);
+    std::string converted;
+    bool is_one_byte;
+    bool changed = false;
+    bool too_long = false;
+    UErrorCode status = U_ZERO_ERROR;
+    {
+      DisallowGarbageCollection no_gc;
+      String::FlatContent content = s->GetFlatContent(no_gc);
+      is_one_byte = content.IsOneByte();
+      if (is_one_byte) {
+        base::Vector<const uint8_t> bytes = content.ToByteVector();
+        icu::StringPiece input(reinterpret_cast<const char*>(bytes.begin()),
+                               to_icu_length(
+                                   static_cast<uint32_t>(bytes.length())));
+        InternalWtf8ByteSink sink(bytes);
+        if (is_to_upper) {
+          icu::CaseMap::utf8ToUpper(lang, 0, input, sink, nullptr, status);
+        } else {
+          icu::CaseMap::utf8ToLower(lang, 0, input, sink, nullptr, status);
+        }
+        sink.Finish();
+        changed = sink.changed();
+        too_long = sink.too_long();
+        if (changed && !too_long) converted = sink.TakeOutput();
+      }
+    }
+    if (is_one_byte) {
+      if (U_FAILURE(status)) {
+        THROW_NEW_ERROR(isolate, NewTypeError(MessageTemplate::kIcuError));
+      }
+      if (too_long) {
+        THROW_NEW_ERROR(isolate, NewInvalidStringLengthError());
+      }
+      if (!changed) return indirect_handle(s, isolate);
+      return isolate->factory()->NewStringFromOneByte(
+          base::Vector<const uint8_t>::cast(base::VectorOf(converted)));
+    }
+  }
+
   auto case_converter = is_to_upper ? u_strToUpper : u_strToLower;
   uint32_t src_length = s->length();
   uint32_t dest_length = src_length;
@@ -498,6 +540,47 @@ Tagged<String> Intl::ConvertOneByteToLower(Tagged<String> src,
 
 MaybeHandle<String> Intl::ConvertToLower(Isolate* isolate,
                                          DirectHandle<String> s) {
+  if (v8_flags.utf8_string_semantics) {
+    s = String::Flatten(isolate, s);
+    bool is_one_byte;
+    {
+      DisallowGarbageCollection no_gc;
+      is_one_byte = s->GetFlatContent(no_gc).IsOneByte();
+    }
+    if (!is_one_byte) {
+      return LocaleConvertCase(isolate, s, false, "");
+    }
+
+    uint32_t length = s->length();
+    if (length < static_cast<int>(sizeof(uintptr_t))) {
+      uint32_t first_upper_or_non_ascii =
+          FindFirstUpperOrNonAscii(*s, length);
+      if (first_upper_or_non_ascii == length) {
+        return indirect_handle(s, isolate);
+      }
+      if (s->Get(first_upper_or_non_ascii) & ~0x7F) {
+        return LocaleConvertCase(isolate, s, false, "");
+      }
+    }
+
+    DirectHandle<SeqOneByteString> result =
+        isolate->factory()->NewRawOneByteString(length).ToHandleChecked();
+    bool is_ascii;
+    {
+      DisallowGarbageCollection no_gc;
+      String::FlatContent content = s->GetFlatContent(no_gc);
+      DCHECK(content.IsOneByte());
+      base::Vector<const uint8_t> bytes = content.ToByteVector();
+      uint8_t* dst = result->GetChars(no_gc);
+      is_ascii = FastAsciiConvert<unibrow::ToLowercase>(
+                     reinterpret_cast<char*>(dst),
+                     reinterpret_cast<const char*>(bytes.begin()), length) ==
+                 length;
+    }
+    if (is_ascii) return indirect_handle(result, isolate);
+    return LocaleConvertCase(isolate, s, false, "");
+  }
+
   if (!s->IsOneByteRepresentation()) {
     // Use a slower implementation for strings with characters beyond U+00FF.
     return LocaleConvertCase(isolate, s, false, "");
@@ -530,6 +613,47 @@ MaybeHandle<String> Intl::ConvertToLower(Isolate* isolate,
 
 MaybeDirectHandle<String> Intl::ConvertToUpper(Isolate* isolate,
                                                DirectHandle<String> s) {
+  if (v8_flags.utf8_string_semantics) {
+    s = String::Flatten(isolate, s);
+    bool is_one_byte;
+    {
+      DisallowGarbageCollection no_gc;
+      is_one_byte = s->GetFlatContent(no_gc).IsOneByte();
+    }
+    if (!is_one_byte) {
+      return LocaleConvertCase(isolate, s, true, "");
+    }
+
+    uint32_t length = s->length();
+    uint32_t prefix;
+    {
+      DisallowGarbageCollection no_gc;
+      String::FlatContent content = s->GetFlatContent(no_gc);
+      DCHECK(content.IsOneByte());
+      prefix = FastAsciiCasePrefixLength<unibrow::ToUppercase>(
+          reinterpret_cast<const char*>(content.ToByteVector().begin()),
+          length);
+      if (prefix == length) return indirect_handle(s, isolate);
+    }
+
+    DirectHandle<SeqOneByteString> result =
+        isolate->factory()->NewRawOneByteString(length).ToHandleChecked();
+    bool is_ascii;
+    {
+      DisallowGarbageCollection no_gc;
+      base::Vector<const uint8_t> bytes =
+          s->GetFlatContent(no_gc).ToByteVector();
+      uint8_t* dst = result->GetChars(no_gc);
+      std::memcpy(dst, bytes.begin(), prefix);
+      is_ascii = FastAsciiConvert<unibrow::ToUppercase>(
+                     reinterpret_cast<char*>(dst) + prefix,
+                     reinterpret_cast<const char*>(bytes.begin()) + prefix,
+                     length - prefix) == length - prefix;
+    }
+    if (is_ascii) return result;
+    return LocaleConvertCase(isolate, s, true, "");
+  }
+
   uint32_t length = s->length();
   if (s->IsOneByteRepresentation() && length > 0) {
     uint32_t prefix;

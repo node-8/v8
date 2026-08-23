@@ -126,7 +126,10 @@ void IntlBuiltinsAssembler::ToLowerCaseImpl(
     TNode<String> string, TNode<Object> maybe_locales,
     TNode<ContextOrEmptyContext> context, ToLowerCaseKind kind,
     std::function<void(TNode<JSAny>)> ReturnFct) {
-  Label call_c(this), return_string(this), runtime(this, Label::kDeferred);
+  Label call_c(this), return_string(this), runtime(this, Label::kDeferred),
+      node8_short(this);
+  const TNode<BoolT> utf8_string_semantics = LoadRuntimeFlag(
+      ExternalReference::address_of_utf8_string_semantics_flag());
 
   // Unpack strings if possible, and bail to runtime unless we get a one-byte
   // flat string.
@@ -178,10 +181,12 @@ void IntlBuiltinsAssembler::ToLowerCaseImpl(
   const TNode<String> dst = AllocateSeqOneByteString(length);
 
   const int kMaxShortStringLength = 24;  // Determined empirically.
-  GotoIf(Uint32GreaterThan(length, Uint32Constant(kMaxShortStringLength)),
-         &call_c);
+  const TNode<BoolT> is_long =
+      Uint32GreaterThan(length, Uint32Constant(kMaxShortStringLength));
+  GotoIf(Word32And(utf8_string_semantics, is_long), &runtime);
+  GotoIf(is_long, &call_c);
 
-  {
+  auto convert_short = [&](bool reject_non_ascii) {
     const TNode<IntPtrT> dst_ptr = PointerToSeqStringData(dst);
     TVARIABLE(IntPtrT, var_cursor, IntPtrConstant(0));
 
@@ -200,6 +205,11 @@ void IntlBuiltinsAssembler::ToLowerCaseImpl(
         push_vars, start_address, end_address,
         [&](TNode<IntPtrT> current) {
           TNode<Uint8T> c = Load<Uint8T>(current);
+          if (reject_non_ascii) {
+            GotoIf(Word32NotEqual(Word32And(c, Int32Constant(0x80)),
+                                  Int32Constant(0)),
+                   &runtime);
+          }
           TNode<Uint8T> lower =
               Load<Uint8T>(to_lower_table_addr, ChangeInt32ToIntPtr(c));
           StoreNoWriteBarrier(MachineRepresentation::kWord8, dst_ptr,
@@ -218,7 +228,13 @@ void IntlBuiltinsAssembler::ToLowerCaseImpl(
     GotoIfNot(var_did_change.value(), &return_string);
 
     ReturnFct(dst);
-  }
+  };
+
+  GotoIf(utf8_string_semantics, &node8_short);
+  convert_short(false);
+
+  BIND(&node8_short);
+  convert_short(true);
 
   // Call into C for case conversion. The signature is:
   // String ConvertOneByteToLower(String src, String dst);
