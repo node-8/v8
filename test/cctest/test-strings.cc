@@ -2179,9 +2179,12 @@ TEST(Node8TwoCharacterFactory) {
   const auto check = [factory](uint16_t c1, uint16_t c2,
                                std::initializer_list<uint8_t> expected) {
     base::uc16 source_chars[] = {0x61, c1, c2, 0x62};
-    DirectHandle<String> source =
-        factory->NewStringFromTwoByte(base::ArrayVector(source_chars))
-            .ToHandleChecked();
+    DirectHandle<SeqTwoByteString> source =
+        factory->NewRawTwoByteString(arraysize(source_chars)).ToHandleChecked();
+    {
+      DisallowGarbageCollection no_gc;
+      CopyChars(source->GetChars(no_gc), source_chars, arraysize(source_chars));
+    }
     DirectHandle<String> string =
         factory->NewProperSubString(source, 1, 3);
     CHECK(string->IsOneByteRepresentation());
@@ -2197,6 +2200,46 @@ TEST(Node8TwoCharacterFactory) {
   check(0xd83d, 0x0078, {0xed, 0xa0, 0xbd, 0x78});
   check(0x0078, 0xdc00, {0x78, 0xed, 0xb0, 0x80});
   check(0x00e9, 0x4e2d, {0xc3, 0xa9, 0xe4, 0xb8, 0xad});
+}
+
+TEST(Node8ApiNewFromTwoByteEncodesWtf8) {
+  if (!v8_flags.utf8_string_semantics) return;
+  CcTest::InitializeVM();
+  v8::HandleScope handle_scope(CcTest::isolate());
+
+  const auto check = [](std::initializer_list<uint16_t> input,
+                        std::initializer_list<uint8_t> expected) {
+    v8::Local<v8::String> value =
+        v8::String::NewFromTwoByte(CcTest::isolate(), input.begin(),
+                                   v8::NewStringType::kNormal,
+                                   static_cast<int>(input.size()))
+            .ToLocalChecked();
+    DirectHandle<String> string = v8::Utils::OpenDirectHandle(*value);
+    CHECK(string->IsOneByteRepresentation());
+    CHECK_EQ(static_cast<uint32_t>(expected.size()), string->length());
+    uint32_t index = 0;
+    for (uint8_t byte : expected) CHECK_EQ(byte, string->Get(index++));
+
+    char output[8] = {};
+    size_t capacity = expected.size() - 1;
+    size_t processed_characters = 0;
+    CHECK_EQ(capacity, value->WriteUtf8V2(CcTest::isolate(), output, capacity,
+                                          v8::String::WriteFlags::kNone,
+                                          &processed_characters));
+    CHECK_EQ(capacity, processed_characters);
+    index = 0;
+    for (uint8_t byte : expected) {
+      if (index == capacity) break;
+      CHECK_EQ(byte, static_cast<uint8_t>(output[index++]));
+    }
+  };
+
+  check({0x0061}, {0x61});
+  check({0x00e9}, {0xc3, 0xa9});
+  check({0x4e2d, 0x6587}, {0xe4, 0xb8, 0xad, 0xe6, 0x96, 0x87});
+  check({0xd83d, 0xde00}, {0xf0, 0x9f, 0x98, 0x80});
+  check({0xd83d, 0x0078}, {0xed, 0xa0, 0xbd, 0x78});
+  check({0x0078, 0xdc00}, {0x78, 0xed, 0xb0, 0x80});
 }
 
 TEST(Node8ApiNewFromUtf8PreservesBytes) {
