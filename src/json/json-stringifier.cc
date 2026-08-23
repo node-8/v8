@@ -13,6 +13,7 @@
 #include "src/common/globals.h"
 #include "src/common/message-template.h"
 #include "src/execution/protectors-inl.h"
+#include "src/flags/flags.h"
 #include "src/numbers/conversions.h"
 #include "src/objects/elements-kind.h"
 #include "src/objects/heap-number-inl.h"
@@ -557,17 +558,131 @@ bool DoNotEscape(const SrcChar* chars, size_t length,
   return no_escape;
 }
 
+template <typename AppendBytes, typename AppendCString>
+bool SerializeNode8JsonString(base::Vector<const uint8_t> bytes, size_t start,
+                              size_t uncopied_src_index,
+                              AppendBytes append_bytes,
+                              AppendCString append_c_string) {
+  bool required_escaping = false;
+  size_t index = start;
+  while (index < bytes.size()) {
+    if (index + sizeof(uint32_t) <= bytes.size()) {
+      uint32_t packed;
+      std::memcpy(&packed, bytes.begin() + index, sizeof(packed));
+      if (!NeedsEscape(packed) && (packed & 0x80808080u) == 0) {
+        index += sizeof(packed);
+        continue;
+      }
+    }
+
+    uint8_t byte = bytes[index];
+    if (byte <= 0x7F) {
+      if (DoNotEscape(byte)) {
+        index++;
+        continue;
+      }
+      required_escaping = true;
+      append_bytes(bytes.begin() + uncopied_src_index,
+                   index - uncopied_src_index);
+      append_c_string(&JsonEscapeTable[byte * kJsonEscapeTableEntrySize]);
+      uncopied_src_index = ++index;
+      continue;
+    }
+
+    unibrow::uchar code_point = 0;
+    size_t sequence_length = 1;
+    bool valid = false;
+    if (byte >= 0xC2 && byte <= 0xDF) {
+      if (index + 1 < bytes.size() && (bytes[index + 1] & 0xC0) == 0x80) {
+        code_point = ((byte & 0x1F) << 6) | (bytes[index + 1] & 0x3F);
+        sequence_length = 2;
+        valid = true;
+      }
+    } else if (byte >= 0xE0 && byte <= 0xEF) {
+      if (index + 1 < bytes.size()) {
+        uint8_t second = bytes[index + 1];
+        bool valid_second = byte == 0xE0 ? second >= 0xA0 && second <= 0xBF
+                                         : (second & 0xC0) == 0x80;
+        if (valid_second) {
+          sequence_length = 2;
+          if (index + 2 < bytes.size() && (bytes[index + 2] & 0xC0) == 0x80) {
+            code_point = ((byte & 0x0F) << 12) | ((second & 0x3F) << 6) |
+                         (bytes[index + 2] & 0x3F);
+            sequence_length = 3;
+            valid = true;
+          }
+        }
+      }
+    } else if (byte >= 0xF0 && byte <= 0xF4) {
+      if (index + 1 < bytes.size()) {
+        uint8_t second = bytes[index + 1];
+        bool valid_second = byte == 0xF0   ? second >= 0x90 && second <= 0xBF
+                            : byte == 0xF4 ? second >= 0x80 && second <= 0x8F
+                                           : (second & 0xC0) == 0x80;
+        if (valid_second) {
+          sequence_length = 2;
+          if (index + 2 < bytes.size() && (bytes[index + 2] & 0xC0) == 0x80) {
+            sequence_length = 3;
+            if (index + 3 < bytes.size() && (bytes[index + 3] & 0xC0) == 0x80) {
+              code_point = ((byte & 0x07) << 18) | ((second & 0x3F) << 12) |
+                           ((bytes[index + 2] & 0x3F) << 6) |
+                           (bytes[index + 3] & 0x3F);
+              sequence_length = 4;
+              valid = true;
+            }
+          }
+        }
+      }
+    }
+
+    bool is_surrogate =
+        valid &&
+        base::IsInRange(code_point, static_cast<unibrow::uchar>(0xD800),
+                        static_cast<unibrow::uchar>(0xDFFF));
+    if (valid && !is_surrogate) {
+      index += sequence_length;
+      continue;
+    }
+
+    required_escaping = true;
+    append_bytes(bytes.begin() + uncopied_src_index,
+                 index - uncopied_src_index);
+    if (is_surrogate) {
+      static constexpr char kHex[] = "0123456789abcdef";
+      char escaped[7] = {'\\',
+                         'u',
+                         kHex[(code_point >> 12) & 0xF],
+                         kHex[(code_point >> 8) & 0xF],
+                         kHex[(code_point >> 4) & 0xF],
+                         kHex[code_point & 0xF],
+                         '\0'};
+      append_c_string(escaped);
+    } else {
+      append_c_string("\xEF\xBF\xBD");
+    }
+    index += sequence_length;
+    uncopied_src_index = index;
+  }
+  append_bytes(bytes.begin() + uncopied_src_index,
+               bytes.size() - uncopied_src_index);
+  return required_escaping;
+}
+
 bool IsFastKey(Tagged<String> key, const DisallowGarbageCollection& no_gc) {
-  return key->DispatchToSpecificType(
-      absl::Overload{[&](Tagged<SeqOneByteString> str) {
-                       const uint8_t* chars = str->GetChars(no_gc);
-                       return DoNotEscape(chars, str->length(), no_gc);
-                     },
-                     [&](Tagged<ExternalOneByteString> str) {
-                       const uint8_t* chars = str->GetChars();
-                       return DoNotEscape(chars, str->length(), no_gc);
-                     },
-                     [&](Tagged<String> str) { return false; }});
+  return key->DispatchToSpecificType(absl::Overload{
+      [&](Tagged<SeqOneByteString> str) {
+        const uint8_t* chars = str->GetChars(no_gc);
+        return DoNotEscape(chars, str->length(), no_gc) &&
+               (!v8_flags.utf8_string_semantics ||
+                NonAsciiStart(chars, str->length()) == str->length());
+      },
+      [&](Tagged<ExternalOneByteString> str) {
+        const uint8_t* chars = str->GetChars();
+        return DoNotEscape(chars, str->length(), no_gc) &&
+               (!v8_flags.utf8_string_semantics ||
+                NonAsciiStart(chars, str->length()) == str->length());
+      },
+      [&](Tagged<String> str) { return false; }});
 }
 
 bool CanFastSerializeJSArray(Isolate* isolate, Tagged<JSArray> object) {
@@ -1604,6 +1719,33 @@ bool JsonStringifier::SerializeString_(Tagged<String> string,
   // We might be able to fit the whole escaped string in the current string
   // part, or we might need to allocate.
   base::Vector<const SrcChar> vector = string->GetCharVector<SrcChar>(no_gc);
+  if constexpr (sizeof(SrcChar) == 1 && !raw_json) {
+    if (v8_flags.utf8_string_semantics) {
+      base::Vector<const uint8_t> bytes =
+          base::Vector<const uint8_t>::cast(vector);
+      if V8_LIKELY (EscapedLengthIfCurrentPartFits(vector.size())) {
+        NoExtendBuilder<DestChar> no_extend(
+            reinterpret_cast<DestChar*>(part_ptr_) + current_index_,
+            &current_index_);
+        required_escaping = SerializeNode8JsonString(
+            bytes, 0, 0,
+            [&](const uint8_t* chars, size_t length) {
+              no_extend.AppendSubstring(chars, 0, length);
+            },
+            [&](const char* chars) { no_extend.AppendCString(chars); });
+        no_extend.Append('"');
+      } else {
+        required_escaping = SerializeNode8JsonString(
+            bytes, 0, 0,
+            [&](const uint8_t* chars, size_t length) {
+              AppendSubstring(chars, 0, length);
+            },
+            [&](const char* chars) { AppendCString(chars); });
+        Append<uint8_t, DestChar>('"');
+      }
+      return required_escaping;
+    }
+  }
   if V8_LIKELY (EscapedLengthIfCurrentPartFits(vector.size())) {
     NoExtendBuilder<DestChar> no_extend(
         reinterpret_cast<DestChar*>(part_ptr_) + current_index_,
@@ -3354,6 +3496,17 @@ template <typename SrcChar>
 bool FastJsonStringifier<Char>::AppendStringScalar(
     const SrcChar* chars, size_t length, size_t start,
     size_t uncopied_src_index, const DisallowGarbageCollection& no_gc) {
+  if (v8_flags.utf8_string_semantics) {
+    return SerializeNode8JsonString(
+        base::Vector<const uint8_t>(reinterpret_cast<const uint8_t*>(chars),
+                                    length),
+        start, uncopied_src_index,
+        [&](const uint8_t* bytes, size_t count) {
+          buffer_.Append(bytes, count);
+        },
+        [&](const char* string) { AppendCStringUnchecked(string); });
+  }
+
   bool needs_escaping = false;
   for (size_t i = start; i < length; i++) {
     SrcChar c = chars[i];
@@ -3381,7 +3534,10 @@ bool FastJsonStringifier<Char>::AppendStringSWAR(
   size_t i = start;
   for (; i + (stride - 1) < length; i += stride) {
     PackedT packed = *reinterpret_cast<const PackedT*>(chars + i);
-    if (V8_UNLIKELY(NeedsEscape(packed))) break;
+    if (V8_UNLIKELY(NeedsEscape(packed) || (v8_flags.utf8_string_semantics &&
+                                            (packed & 0x80808080u) != 0))) {
+      break;
+    }
   }
   return AppendStringScalar(chars, length, i, uncopied_src_index, no_gc);
 }
@@ -3404,6 +3560,7 @@ bool FastJsonStringifier<Char>::AppendStringSIMD(
   const auto mask_0x20 = hw::Set(tag, 0x20);
   const auto mask_0x22 = hw::Set(tag, 0x22);
   const auto mask_0x5c = hw::Set(tag, 0x5c);
+  const auto mask_0x80 = hw::Set(tag, 0x80);
 
   for (; block + (stride - 1) < end; block += stride) {
     const auto input = hw::LoadU(tag, block);
@@ -3412,15 +3569,26 @@ bool FastJsonStringifier<Char>::AppendStringSIMD(
     const auto has_lower_than_0x20 = hw::Lt(input, mask_0x20);
     const auto has_0x22 = hw::Eq(input, mask_0x22);
     const auto has_0x5c = hw::Eq(input, mask_0x5c);
-    const auto result = hw::Or(hw::Or(has_lower_than_0x20, has_0x22), has_0x5c);
+    auto result = hw::Or(hw::Or(has_lower_than_0x20, has_0x22), has_0x5c);
+    if (v8_flags.utf8_string_semantics) {
+      const auto has_high_bit = hw::Eq(hw::And(input, mask_0x80), mask_0x80);
+      result = hw::Or(result, has_high_bit);
+    }
 
     // No character that needs escaping found in block.
     if (V8_LIKELY(hw::AllFalse(tag, result))) continue;
 
-    needs_escaping = true;
     size_t index = hw::FindKnownFirstTrue(tag, result);
     Char found_char = block[index];
     const size_t char_index = block - chars + index;
+    if (v8_flags.utf8_string_semantics &&
+        (static_cast<uint8_t>(found_char) & 0x80) != 0) {
+      return AppendStringScalar(chars, length, char_index, uncopied_src_index,
+                                no_gc) ||
+             needs_escaping;
+    }
+
+    needs_escaping = true;
     const size_t copy_length = char_index - uncopied_src_index;
     buffer_.Append(chars + uncopied_src_index, copy_length);
     SBXCHECK_LT(found_char, 0x60);

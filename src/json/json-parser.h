@@ -30,6 +30,7 @@ class JsonString final {
   JsonString()
       : start_(0),
         length_(0),
+        source_length_(0),
         needs_conversion_(false),
         internalize_(false),
         has_escape_(false),
@@ -38,6 +39,7 @@ class JsonString final {
   explicit JsonString(uint32_t index)
       : index_(index),
         length_(0),
+        source_length_(0),
         needs_conversion_(false),
         internalize_(false),
         has_escape_(false),
@@ -47,6 +49,17 @@ class JsonString final {
              bool internalize, bool has_escape)
       : start_(start),
         length_(length),
+        source_length_(length),
+        needs_conversion_(needs_conversion),
+        internalize_(internalize),
+        has_escape_(has_escape),
+        is_index_(false) {}
+
+  JsonString(uint32_t start, uint32_t length, uint32_t source_length,
+             bool needs_conversion, bool internalize, bool has_escape)
+      : start_(start),
+        length_(length),
+        source_length_(source_length),
         needs_conversion_(needs_conversion),
         internalize_(internalize),
         has_escape_(has_escape),
@@ -77,6 +90,11 @@ class JsonString final {
     return length_;
   }
 
+  uint32_t source_length() const {
+    DCHECK(!is_index_);
+    return source_length_;
+  }
+
   uint32_t index() const {
     DCHECK(is_index_);
     return index_;
@@ -90,6 +108,7 @@ class JsonString final {
     const uint32_t index_;
   };
   const uint32_t length_;
+  const uint32_t source_length_;
   const bool needs_conversion_ : 1;
   const bool internalize_ : 1;
   const bool has_escape_ : 1;
@@ -380,6 +399,9 @@ class JsonParser final {
   }
   Handle<String> MakeString(const JsonString& string,
                             Handle<String> hint = Handle<String>());
+
+  Handle<String> DecodeStringNode8(const JsonString& string,
+                                   Handle<String> hint);
 
   template <typename SinkChar>
   void DecodeString(SinkChar* sink, uint32_t start, uint32_t length);

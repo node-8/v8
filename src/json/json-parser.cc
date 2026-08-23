@@ -15,6 +15,7 @@
 #include "src/common/message-template.h"
 #include "src/debug/debug.h"
 #include "src/execution/frames-inl.h"
+#include "src/flags/flags.h"
 #include "src/heap/factory.h"
 #include "src/numbers/conversions.h"
 #include "src/numbers/hash-seed-inl.h"
@@ -2393,7 +2394,104 @@ bool Matches(base::Vector<const Char> chars, DirectHandle<String> string) {
   return string->IsEqualTo(chars);
 }
 
+size_t Wtf8EncodedLength(base::uc32 code_point) {
+  if (code_point <= 0x7F) return 1;
+  if (code_point <= 0x7FF) return 2;
+  if (code_point <= 0xFFFF) return 3;
+  return 4;
+}
+
+void AppendWtf8(base::uc32 code_point, std::vector<uint8_t>* output) {
+  if (code_point <= 0x7F) {
+    output->push_back(static_cast<uint8_t>(code_point));
+  } else if (code_point <= 0x7FF) {
+    output->push_back(static_cast<uint8_t>(0xC0 | (code_point >> 6)));
+    output->push_back(static_cast<uint8_t>(0x80 | (code_point & 0x3F)));
+  } else if (code_point <= 0xFFFF) {
+    output->push_back(static_cast<uint8_t>(0xE0 | (code_point >> 12)));
+    output->push_back(static_cast<uint8_t>(0x80 | ((code_point >> 6) & 0x3F)));
+    output->push_back(static_cast<uint8_t>(0x80 | (code_point & 0x3F)));
+  } else {
+    output->push_back(static_cast<uint8_t>(0xF0 | (code_point >> 18)));
+    output->push_back(static_cast<uint8_t>(0x80 | ((code_point >> 12) & 0x3F)));
+    output->push_back(static_cast<uint8_t>(0x80 | ((code_point >> 6) & 0x3F)));
+    output->push_back(static_cast<uint8_t>(0x80 | (code_point & 0x3F)));
+  }
+}
+
 }  // namespace
+
+template <typename Char>
+Handle<String> JsonParser<Char>::DecodeStringNode8(const JsonString& string,
+                                                   Handle<String> hint) {
+  std::vector<uint8_t> output;
+  output.reserve(string.length());
+  uint32_t index = string.start();
+  uint32_t end = index + string.source_length();
+  while (index < end) {
+    Char current = chars_[index++];
+    if (current != '\\') {
+      output.push_back(static_cast<uint8_t>(current));
+      continue;
+    }
+
+    Char escaped = chars_[index++];
+    switch (GetEscapeKind(character_json_scan_flags[escaped])) {
+      case EscapeKind::kSelf:
+        output.push_back(static_cast<uint8_t>(escaped));
+        break;
+      case EscapeKind::kBackspace:
+        output.push_back('\x08');
+        break;
+      case EscapeKind::kTab:
+        output.push_back('\x09');
+        break;
+      case EscapeKind::kNewLine:
+        output.push_back('\x0A');
+        break;
+      case EscapeKind::kFormFeed:
+        output.push_back('\x0C');
+        break;
+      case EscapeKind::kCarriageReturn:
+        output.push_back('\x0D');
+        break;
+      case EscapeKind::kUnicode: {
+        base::uc32 value = 0;
+        for (int digit = 0; digit < 4; ++digit) {
+          value = value * 16 + base::HexValue(chars_[index++]);
+        }
+        if (unibrow::Utf16::IsLeadSurrogate(value) && index + 6 <= end &&
+            chars_[index] == '\\' && chars_[index + 1] == 'u') {
+          base::uc32 trail = 0;
+          bool valid = true;
+          for (int digit = 0; digit < 4; ++digit) {
+            int hex = base::HexValue(chars_[index + 2 + digit]);
+            if (hex < 0) {
+              valid = false;
+              break;
+            }
+            trail = trail * 16 + hex;
+          }
+          if (valid && unibrow::Utf16::IsTrailSurrogate(trail)) {
+            value = unibrow::Utf16::CombineSurrogatePair(value, trail);
+            index += 6;
+          }
+        }
+        AppendWtf8(value, &output);
+        break;
+      }
+      case EscapeKind::kIllegal:
+        UNREACHABLE();
+    }
+  }
+
+  DCHECK_EQ(output.size(), string.length());
+  base::Vector<const uint8_t> bytes = base::VectorOf(output);
+  if (!hint.is_null() && Matches(bytes, hint)) return hint;
+  Handle<String> result =
+      factory()->NewStringFromOneByte(bytes).ToHandleChecked();
+  return string.internalize() ? factory()->InternalizeString(result) : result;
+}
 
 template <typename Char>
 template <typename SinkSeqString>
@@ -2424,6 +2522,11 @@ Handle<String> JsonParser<Char>::DecodeString(
 template <typename Char>
 Handle<String> JsonParser<Char>::MakeString(const JsonString& string,
                                             Handle<String> hint) {
+  if constexpr (sizeof(Char) == 1) {
+    if (v8_flags.utf8_string_semantics && string.has_escape()) {
+      return DecodeStringNode8(string, hint);
+    }
+  }
   if (string.length() == 0) return factory()->empty_string();
   if (string.length() == 1) {
     uint16_t first_char;
@@ -2572,11 +2675,15 @@ JsonString JsonParser<Char>::ScanJsonString(bool needs_internalization) {
       uint32_t length = end - offset;
       bool convert = sizeof(Char) == 1 ? bits > unibrow::Latin1::kMaxChar
                                        : bits <= unibrow::Latin1::kMaxChar;
+      if constexpr (sizeof(Char) == 1) {
+        if (v8_flags.utf8_string_semantics) convert = false;
+      }
       constexpr int kMaxInternalizedStringValueLength = 10;
       bool internalize =
           needs_internalization ||
           (sizeof(Char) == 1 && length < kMaxInternalizedStringValueLength);
-      return JsonString(start, length, convert, internalize, has_escape);
+      return JsonString(start, length, end - start, convert, internalize,
+                        has_escape);
     }
 
     if (*cursor_ == '\\') {
@@ -2608,6 +2715,32 @@ JsonString JsonParser<Char>::ScanJsonString(bool needs_internalization) {
             return JsonString();
           }
           bits |= value;
+          if constexpr (sizeof(Char) == 1) {
+            if (v8_flags.utf8_string_semantics) {
+              uint32_t source_length = 6;
+              if (unibrow::Utf16::IsLeadSurrogate(value) &&
+                  cursor_ + 6 < end_ && cursor_[1] == '\\' &&
+                  cursor_[2] == 'u') {
+                base::uc32 trail = 0;
+                bool valid_trail = true;
+                for (int digit = 0; digit < 4; ++digit) {
+                  int hex = base::HexValue(cursor_[3 + digit]);
+                  if (hex < 0) {
+                    valid_trail = false;
+                    break;
+                  }
+                  trail = trail * 16 + hex;
+                }
+                if (valid_trail && unibrow::Utf16::IsTrailSurrogate(trail)) {
+                  value = unibrow::Utf16::CombineSurrogatePair(value, trail);
+                  cursor_ += 6;
+                  source_length = 12;
+                }
+              }
+              offset += source_length - Wtf8EncodedLength(value);
+              break;
+            }
+          }
           // \uXXXX results in either 1 or 2 Utf16 characters, depending on
           // whether the decoded value requires a surrogate pair.
           offset += 5 - (value > static_cast<base::uc32>(
