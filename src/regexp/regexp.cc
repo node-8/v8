@@ -211,25 +211,29 @@ bool IsAsciiPattern(DirectHandle<String> pattern) {
   return true;
 }
 
+bool ContainsMalformedNode8Bytes(DirectHandle<String> source) {
+  DCHECK(source->IsFlat());
+  DisallowGarbageCollection no_gc;
+  String::FlatContent content = source->GetFlatContent(no_gc);
+  if (!content.IsOneByte()) return false;
+  Wtf8ByteCursor cursor(content.ToByteVector(),
+                        Wtf8ByteCursor::Policy::kInternalWtf8);
+  while (cursor.has_next()) {
+    if (cursor.DecodeNext().status == Wtf8ByteCursor::Status::kReplaced) {
+      return true;
+    }
+  }
+  return false;
+}
+
 MaybeDirectHandle<String> NewWtf8AtomString(
     Isolate* isolate, DirectHandle<String> source,
     base::Vector<const base::uc16> pattern) {
   source = String::Flatten(isolate, source);
-  if (String::IsOneByteRepresentationUnderneath(*source)) {
-    DisallowGarbageCollection no_gc;
-    String::FlatContent content = source->GetFlatContent(no_gc);
-    if (content.IsOneByte()) {
-      Wtf8ByteCursor cursor(content.ToByteVector(),
-                            Wtf8ByteCursor::Policy::kInternalWtf8);
-      while (cursor.has_next()) {
-        if (cursor.DecodeNext().status == Wtf8ByteCursor::Status::kReplaced) {
-          // The parser preserves malformed source bytes in the atom data.
-          // Keep those bytes raw instead of turning U+00xx into canonical
-          // UTF-8.
-          return source;
-        }
-      }
-    }
+  if (ContainsMalformedNode8Bytes(source)) {
+    // The parser preserves malformed source bytes in the atom data. Keep
+    // those bytes raw instead of turning U+00xx into canonical UTF-8.
+    return source;
   }
   std::vector<uint8_t> bytes(pattern.length() * 3);
   unibrow::Utf8::EncodingResult encoded = unibrow::Utf8::Encode(
@@ -238,6 +242,15 @@ MaybeDirectHandle<String> NewWtf8AtomString(
   CHECK_EQ(encoded.characters_processed, pattern.size());
   return isolate->factory()->NewStringFromOneByte(
       base::Vector<const uint8_t>(bytes.data(), encoded.bytes_written));
+}
+
+MaybeDirectHandle<String> NewWtf8CodePointString(Isolate* isolate,
+                                                  base::uc32 code_point) {
+  char bytes[unibrow::Utf8::kMaxEncodedSize];
+  unsigned length = unibrow::Utf8::Encode(
+      bytes, code_point, unibrow::Utf16::kNoPreviousCharacter, false);
+  return isolate->factory()->NewStringFromOneByte(base::Vector<const uint8_t>(
+      reinterpret_cast<const uint8_t*>(bytes), length));
 }
 
 std::optional<base::Vector<const base::uc16>> GetLiteralAtomPattern(
@@ -253,6 +266,18 @@ std::optional<base::Vector<const base::uc16>> GetLiteralAtomPattern(
     scratch->insert(scratch->end(), atom.begin(), atom.end());
   }
   return base::Vector<const base::uc16>(scratch->data(), scratch->size());
+}
+
+std::optional<base::uc32> GetSingletonClassCodePoint(RegExpTree* tree,
+                                                      Zone* zone) {
+  if (!tree->IsClassRanges()) return std::nullopt;
+  RegExpClassRanges* character_class = tree->AsClassRanges();
+  if (character_class->is_negated()) return std::nullopt;
+  ZoneList<CharacterRange>* ranges = character_class->ranges(zone);
+  if (ranges->length() != 1) return std::nullopt;
+  CharacterRange range = ranges->at(0);
+  if (range.from() != range.to()) return std::nullopt;
+  return range.from();
 }
 
 }  // namespace
@@ -351,6 +376,20 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
         RegExpImpl::AtomCompile(isolate, re, pattern, flags, atom_string);
         has_been_compiled = true;
       }
+    }
+  } else if (v8_flags.utf8_string_semantics && !IsIgnoreCase(flags) &&
+             !IsSticky(flags) && parse_result.capture_count == 0 &&
+             parse_result.tree->IsClassRanges() &&
+             !ContainsMalformedNode8Bytes(pattern)) {
+    std::optional<base::uc32> code_point =
+        GetSingletonClassCodePoint(parse_result.tree, &zone);
+    if (code_point.has_value()) {
+      DirectHandle<String> atom_string;
+      ASSIGN_RETURN_ON_EXCEPTION(
+          isolate, atom_string,
+          NewWtf8CodePointString(isolate, code_point.value()));
+      RegExpImpl::AtomCompile(isolate, re, pattern, flags, atom_string);
+      has_been_compiled = true;
     }
   }
   if (!has_been_compiled) {
