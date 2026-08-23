@@ -91,12 +91,12 @@ uint32_t from_icu_length(int32_t value) {
   return static_cast<uint32_t>(value);
 }
 
-// ICU normalization preserves malformed UTF-8 unchanged. Apply node-8's Web
-// scalar replacement policy while ICU streams its UTF-8 output, without an
-// intermediate UTF-16 string or a separate validation pass.
-class WebScalarUtf8ByteSink final : public icu::ByteSink {
+// ICU normalization preserves malformed UTF-8 unchanged. Apply node-8's
+// internal WTF-8 replacement policy while ICU streams its UTF-8 output,
+// without an intermediate UTF-16 string or a separate validation pass.
+class InternalWtf8ByteSink final : public icu::ByteSink {
  public:
-  explicit WebScalarUtf8ByteSink(base::Vector<const uint8_t> source)
+  explicit InternalWtf8ByteSink(base::Vector<const uint8_t> source)
       : source_(source) {}
 
   void Append(const char* bytes, int32_t length) final {
@@ -147,11 +147,7 @@ class WebScalarUtf8ByteSink final : public icu::ByteSink {
     pending_[pending_length_++] = byte;
     if (state_ != GeneralizedUtf8DfaDecoder::kAccept) return;
 
-    if (current_ >= 0xD800u && current_ <= 0xDFFFu) {
-      EmitReplacement();
-    } else {
-      Emit(pending_, pending_length_);
-    }
+    Emit(pending_, pending_length_);
     ResetSequence();
   }
 
@@ -2824,7 +2820,7 @@ MaybeDirectHandle<String> Intl::Normalize(Isolate* isolate,
           too_long = normalized.size() >
                      static_cast<size_t>(String::kMaxLength);
         } else {
-          WebScalarUtf8ByteSink sink(bytes);
+          InternalWtf8ByteSink sink(bytes);
           normalizer->normalizeUTF8(0, input, sink, nullptr, status);
           sink.Finish();
           changed = sink.changed();
