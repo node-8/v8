@@ -402,6 +402,57 @@ icu::StringPiece ToICUStringPiece(Isolate* isolate, DirectHandle<String> string,
   return icu::StringPiece(char_buffer + offset, to_icu_length(length - offset));
 }
 
+std::optional<icu::StringPiece> ToICUNode8StringPiece(
+    DirectHandle<String> string, uint32_t offset) {
+  DCHECK(string->IsFlat());
+  DisallowGarbageCollection no_gc;
+
+  const String::FlatContent& flat = string->GetFlatContent(no_gc);
+  if (!flat.IsOneByte()) return std::nullopt;
+
+  uint32_t length = string->length();
+  SBXCHECK_LE(offset, length);
+  const char* bytes =
+      reinterpret_cast<const char*>(flat.ToByteVector().begin());
+  return icu::StringPiece(bytes + offset, to_icu_length(length - offset));
+}
+
+icu::UnicodeString DecodeNode8StringForIcu(DirectHandle<String> string,
+                                           uint32_t offset) {
+  DCHECK(string->IsFlat());
+  DisallowGarbageCollection no_gc;
+  base::Vector<const uint8_t> bytes =
+      string->GetFlatContent(no_gc).ToByteVector();
+  SBXCHECK_LE(offset, bytes.size());
+
+  Wtf8ByteCursor cursor(bytes, Wtf8ByteCursor::Policy::kInternalWtf8, offset);
+  icu::UnicodeString decoded;
+  while (cursor.has_next()) {
+    unibrow::uchar code_point = cursor.DecodeNext().code_point;
+    if (code_point <= kMaxUInt16) {
+      decoded.append(static_cast<char16_t>(code_point));
+    } else {
+      decoded.append(static_cast<UChar32>(code_point));
+    }
+  }
+  return decoded;
+}
+
+bool ContainsWtf8Surrogate(const icu::StringPiece& string) {
+  if (string.length() < 2) return false;
+  const uint8_t* cursor =
+      reinterpret_cast<const uint8_t*>(string.data());
+  const uint8_t* end = cursor + string.length();
+  while (cursor + 1 < end) {
+    cursor = static_cast<const uint8_t*>(
+        std::memchr(cursor, 0xED, static_cast<size_t>(end - cursor)));
+    if (cursor == nullptr || cursor + 1 == end) return false;
+    if ((cursor[1] & 0xE0) == 0xA0) return true;
+    cursor++;
+  }
+  return false;
+}
+
 MaybeHandle<String> LocaleConvertCase(Isolate* isolate, DirectHandle<String> s,
                                       bool is_to_upper, const char* lang) {
   if (v8_flags.utf8_string_semantics) {
@@ -1720,6 +1771,32 @@ int Intl::CompareStrings(Isolate* isolate, const icu::Collator& icu_collator,
 
   UCollationResult result;
   UErrorCode status = U_ZERO_ERROR;
+  if (v8_flags.utf8_string_semantics) {
+    std::optional<icu::StringPiece> string_piece1 =
+        ToICUNode8StringPiece(string1, processed_until);
+    std::optional<icu::StringPiece> string_piece2 =
+        ToICUNode8StringPiece(string2, processed_until);
+    if (string_piece1.has_value() && string_piece2.has_value() &&
+        !ContainsWtf8Surrogate(*string_piece1) &&
+        !ContainsWtf8Surrogate(*string_piece2)) {
+      result = icu_collator.compareUTF8(*string_piece1, *string_piece2, status);
+      if (U_SUCCESS(status)) return result;
+      status = U_ZERO_ERROR;
+    }
+
+    icu::UnicodeString string_val1 =
+        string_piece1.has_value()
+            ? DecodeNode8StringForIcu(string1, processed_until)
+            : Intl::ToICUUnicodeString(isolate, string1, processed_until);
+    icu::UnicodeString string_val2 =
+        string_piece2.has_value()
+            ? DecodeNode8StringForIcu(string2, processed_until)
+            : Intl::ToICUUnicodeString(isolate, string2, processed_until);
+    result = icu_collator.compare(string_val1, string_val2, status);
+    DCHECK(U_SUCCESS(status));
+    return result;
+  }
+
   icu::StringPiece string_piece1 =
       ToICUStringPiece(isolate, string1, processed_until);
   if (!string_piece1.empty()) {
