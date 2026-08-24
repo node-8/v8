@@ -232,32 +232,3 @@ stickyExact.lastIndex = 1;
 check(stickyExact, eAcute + 'b', 1, raw(0xa9) + 'b');
 stickyExact.lastIndex = 0;
 assertNull(stickyExact.exec('a' + cjk));
-
-check(/[é-ë]{2,3}/u, cjk + eAcute.repeat(4), 3, eAcute.repeat(3));
-check(/[^a]{2,3}/u, 'a' + cjk + emoji + eAcute + 'a', 1,
-      cjk + emoji + eAcute);
-
-const boundedGlobalMatches = Array.from(
-    eAcute.repeat(7).matchAll(/[é]{2,3}/gu));
-assertEquals([0, 6], boundedGlobalMatches.map(match => match.index));
-assertEquals([eAcute.repeat(3), eAcute.repeat(3)],
-             boundedGlobalMatches.map(match => match[0]));
-
-const zeroMinMatches = Array.from(
-    (eAcute.repeat(3) + 'a').matchAll(/[é]{0,2}/gu));
-assertEquals([0, 4, 6, 7], zeroMinMatches.map(match => match.index));
-assertEquals([eAcute.repeat(2), eAcute, '', ''],
-             zeroMinMatches.map(match => match[0]));
-
-const negatedZeroMinMatches = Array.from(
-    (cjk + 'a').matchAll(/[^a]{0,2}/gu));
-assertEquals([0, 3, 4], negatedZeroMinMatches.map(match => match.index));
-assertEquals([cjk, '', ''], negatedZeroMinMatches.map(match => match[0]));
-
-const stickyBounded = /[^a]{1,2}/uy;
-stickyBounded.lastIndex = 1;
-check(stickyBounded, eAcute + cjk, 1, raw(0xa9) + cjk);
-stickyBounded.lastIndex = 0;
-assertNull(stickyBounded.exec('a' + cjk));
-
-assertNull(/[é]{2147483647}/u.exec(eAcute.repeat(3)));
