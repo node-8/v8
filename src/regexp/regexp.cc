@@ -670,6 +670,12 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
             node8_class_exact_repetition >= 0) {
           node8_class_tree = quantifier->body();
         }
+      } else if (parse_result.capture_count > 0 && quantifier->is_greedy() &&
+                 quantifier->min() == 1 &&
+                 quantifier->max() == RegExpTree::kInfinity) {
+        node8_class_tree = GetCaptureWrappedClass(
+            quantifier->body(), parse_result.capture_count);
+        if (node8_class_tree != nullptr) is_wtf8_class_run = true;
       } else if (parse_result.capture_count > 0 &&
                  (quantifier->is_greedy() ||
                   quantifier->is_non_greedy()) &&
@@ -694,11 +700,14 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
           (node8_class_ranges->is_empty() ||
            node8_class_ranges->at(node8_class_ranges->length() - 1).to() <=
                unibrow::Utf8::kMaxOneByteChar);
-      // A greedy run has the same byte endpoints when every non-ASCII scalar
-      // has uniform membership. Positive optional and exact ASCII classes also
-      // have the same endpoints, while a negated class must consume scalars.
+      // A capture-free greedy run has the same byte endpoints when every
+      // non-ASCII scalar has uniform membership. A positive ASCII run also
+      // captures only one-byte members. Positive optional and exact ASCII
+      // classes have the same endpoints, while a captured negated run must
+      // decode its final scalar start.
       if (has_only_ascii_ranges &&
-          (is_wtf8_class_run ||
+          ((is_wtf8_class_run &&
+            (parse_result.capture_count == 0 || !is_wtf8_class_negated)) ||
            ((is_wtf8_class_optional || node8_class_exact_repetition >= 0) &&
             !is_wtf8_class_negated))) {
         node8_class_ranges = nullptr;
@@ -1259,8 +1268,10 @@ int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
     }
 
     size_t match_end = position;
+    size_t capture_start = static_cast<size_t>(start);
     if (is_run) {
       while (position < bytes.size()) {
+        size_t scalar_start = position;
         unibrow::uchar next_code_point =
             DecodeNode8ClassCodePoint(bytes, &position);
         bool next_is_match = Node8ClassContains(
@@ -1268,13 +1279,18 @@ int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
             next_code_point);
         if (is_negated) next_is_match = !next_is_match;
         if (!next_is_match) break;
+        capture_start = scalar_start;
         match_end = position;
       }
     }
 
     int offset = matches * registers_per_match;
-    for (int capture = 0; capture <= capture_count; ++capture) {
-      output[offset + RegExpCapture::StartRegister(capture)] = start;
+    output[offset + RegExpCapture::StartRegister(0)] = start;
+    output[offset + RegExpCapture::EndRegister(0)] =
+        static_cast<int>(match_end);
+    for (int capture = 1; capture <= capture_count; ++capture) {
+      output[offset + RegExpCapture::StartRegister(capture)] =
+          static_cast<int>(capture_start);
       output[offset + RegExpCapture::EndRegister(capture)] =
           static_cast<int>(match_end);
     }
