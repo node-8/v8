@@ -1070,35 +1070,76 @@ int Wtf8BoundedNegatedAsciiExecRawImpl(
   }
   const int repetition_limit =
       kMaxRepetition > 0 ? kMaxRepetition : max_repetition;
+  DCHECK_EQ(registers_per_match, JSRegExp::kAtomRegisterCount);
   int matches = 0;
   if (min_repetition == 0) {
-    while (matches < max_matches && position <= bytes.size()) {
-      size_t start = position;
-      size_t match_end = position;
-      int repeated = 0;
-      while (repeated < repetition_limit && match_end < bytes.size()) {
-        uint8_t byte = bytes[match_end];
-        if (V8_LIKELY(byte <= unibrow::Utf8::kMaxOneByteChar)) {
-          if (byte >= single_range_from && byte <= single_range_to) break;
-          match_end++;
-        } else {
-          DecodeNode8ClassCodePoint(bytes, &match_end);
-        }
-        repeated++;
+    int repeated = 0;
+    size_t run_start = position;
+    while (matches < max_matches && position < bytes.size()) {
+      size_t scalar_start = position;
+      uint8_t byte = bytes[position];
+      bool is_match;
+      if (V8_LIKELY(byte <= unibrow::Utf8::kMaxOneByteChar)) {
+        position++;
+        is_match = byte < single_range_from || byte > single_range_to;
+      } else {
+        DecodeNode8ClassCodePoint(bytes, &position);
+        is_match = true;
       }
 
-      int offset = matches * registers_per_match;
-      output[offset + RegExpCapture::StartRegister(0)] =
-          static_cast<int>(start);
-      output[offset + RegExpCapture::EndRegister(0)] =
-          static_cast<int>(match_end);
-      matches++;
-      if (match_end == start) {
-        if (match_end == bytes.size()) break;
-        position = match_end + 1;
-      } else {
-        position = match_end;
+      if (is_match) {
+        if (repeated == 0) run_start = scalar_start;
+        repeated++;
+        if (repeated < repetition_limit) continue;
+
+        int offset = matches * JSRegExp::kAtomRegisterCount;
+        output[offset + RegExpCapture::StartRegister(0)] =
+            static_cast<int>(run_start);
+        output[offset + RegExpCapture::EndRegister(0)] =
+            static_cast<int>(position);
+        matches++;
+        repeated = 0;
+        continue;
       }
+
+      if (repeated > 0) {
+        int offset = matches * JSRegExp::kAtomRegisterCount;
+        output[offset + RegExpCapture::StartRegister(0)] =
+            static_cast<int>(run_start);
+        output[offset + RegExpCapture::EndRegister(0)] =
+            static_cast<int>(scalar_start);
+        matches++;
+        repeated = 0;
+        if (matches == max_matches) {
+          position = scalar_start;
+          break;
+        }
+      }
+
+      int offset = matches * JSRegExp::kAtomRegisterCount;
+      output[offset + RegExpCapture::StartRegister(0)] =
+          static_cast<int>(scalar_start);
+      output[offset + RegExpCapture::EndRegister(0)] =
+          static_cast<int>(scalar_start);
+      matches++;
+      position = scalar_start + 1;
+    }
+    if (matches < max_matches && repeated > 0) {
+      int offset = matches * JSRegExp::kAtomRegisterCount;
+      output[offset + RegExpCapture::StartRegister(0)] =
+          static_cast<int>(run_start);
+      output[offset + RegExpCapture::EndRegister(0)] =
+          static_cast<int>(position);
+      matches++;
+      repeated = 0;
+    }
+    if (matches < max_matches && position == bytes.size() && repeated == 0) {
+      int offset = matches * JSRegExp::kAtomRegisterCount;
+      output[offset + RegExpCapture::StartRegister(0)] =
+          static_cast<int>(position);
+      output[offset + RegExpCapture::EndRegister(0)] =
+          static_cast<int>(position);
+      matches++;
     }
     return matches;
   }
@@ -1118,7 +1159,7 @@ int Wtf8BoundedNegatedAsciiExecRawImpl(
     }
     if (!is_match) {
       if (repeated >= min_repetition) {
-        int offset = matches * registers_per_match;
+        int offset = matches * JSRegExp::kAtomRegisterCount;
         output[offset + RegExpCapture::StartRegister(0)] =
             static_cast<int>(run_start);
         output[offset + RegExpCapture::EndRegister(0)] =
@@ -1135,7 +1176,7 @@ int Wtf8BoundedNegatedAsciiExecRawImpl(
     repeated++;
     if (repeated < repetition_limit) continue;
 
-    int offset = matches * registers_per_match;
+    int offset = matches * JSRegExp::kAtomRegisterCount;
     output[offset + RegExpCapture::StartRegister(0)] =
         static_cast<int>(run_start);
     output[offset + RegExpCapture::EndRegister(0)] =
@@ -1144,7 +1185,7 @@ int Wtf8BoundedNegatedAsciiExecRawImpl(
     repeated = 0;
   }
   if (matches < max_matches && repeated >= min_repetition) {
-    int offset = matches * registers_per_match;
+    int offset = matches * JSRegExp::kAtomRegisterCount;
     output[offset + RegExpCapture::StartRegister(0)] =
         static_cast<int>(run_start);
     output[offset + RegExpCapture::EndRegister(0)] =
