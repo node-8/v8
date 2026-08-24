@@ -965,12 +965,20 @@ int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
   const int max_matches =
       global ? output_size / JSRegExp::kAtomRegisterCount : 1;
   int matches = 0;
-  Wtf8ByteCursor cursor(subject.ToByteVector(),
-                        Wtf8ByteCursor::Policy::kInternalWtf8, index);
-  while (matches < max_matches && cursor.has_next()) {
-    int start = static_cast<int>(cursor.position());
-    Wtf8ByteCursor::Result result = cursor.DecodeNext();
-    bool is_match = Node8ClassContains(ranges, result.code_point);
+  base::Vector<const uint8_t> bytes = subject.ToByteVector();
+  size_t position = index;
+  while (matches < max_matches && position < bytes.size()) {
+    int start = static_cast<int>(position);
+    unibrow::uchar code_point;
+    if (V8_LIKELY(bytes[position] <= unibrow::Utf8::kMaxOneByteChar)) {
+      code_point = bytes[position++];
+    } else {
+      Wtf8ByteCursor cursor(bytes, Wtf8ByteCursor::Policy::kInternalWtf8,
+                            position);
+      code_point = cursor.DecodeNext().code_point;
+      position = cursor.position();
+    }
+    bool is_match = Node8ClassContains(ranges, code_point);
     if (is_negated) is_match = !is_match;
     if (!is_match) {
       if (sticky) break;
@@ -979,7 +987,7 @@ int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
 
     int offset = matches * JSRegExp::kAtomRegisterCount;
     output[offset] = start;
-    output[offset + 1] = static_cast<int>(cursor.position());
+    output[offset + 1] = static_cast<int>(position);
     matches++;
     if (!global) break;
   }
