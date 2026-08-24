@@ -169,6 +169,8 @@ BIT_FIELD_ACCESSORS(IrRegExpData, bit_field, is_wtf8_class,
                     IrRegExpData::Bits::IsWtf8ClassBit)
 BIT_FIELD_ACCESSORS(IrRegExpData, bit_field, is_wtf8_class_negated,
                     IrRegExpData::Bits::IsWtf8ClassNegatedBit)
+BIT_FIELD_ACCESSORS(IrRegExpData, bit_field, is_wtf8_class_plus,
+                    IrRegExpData::Bits::IsWtf8ClassPlusBit)
 
 }  // namespace internal
 }  // namespace v8

@@ -2312,6 +2312,7 @@ void IrRegExpData::IrRegExpDataVerify(Isolate* isolate) {
       capture_name_map() != Smi::FromInt(JSRegExp::kUninitializedValue));
   CHECK_IMPLIES(!is_wtf8_class(), !has_node8_class_ranges());
   CHECK_IMPLIES(is_wtf8_class_negated(), is_wtf8_class());
+  CHECK_IMPLIES(is_wtf8_class_plus(), is_wtf8_class());
   if (has_node8_class_ranges()) {
     CHECK_EQ(node8_class_ranges()->length() % (2 * sizeof(uint32_t)), 0);
   }

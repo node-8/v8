@@ -270,6 +270,7 @@ class IrRegExpData : public RegExpData {
   DECL_BOOLEAN_ACCESSORS(is_wtf8_dot)
   DECL_BOOLEAN_ACCESSORS(is_wtf8_class)
   DECL_BOOLEAN_ACCESSORS(is_wtf8_class_negated)
+  DECL_BOOLEAN_ACCESSORS(is_wtf8_class_plus)
 
   struct Bits {
     DEFINE_TORQUE_GENERATED_IR_REG_EXP_DATA_BIT_FIELD()

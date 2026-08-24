@@ -115,3 +115,18 @@ assertEquals('X(X', malformed.replace(/([\uFFFD])/gu,
       return 'X';
     }));
 assertEquals([0, 2], captureReplaceIndices);
+
+const plusSubject = eAcute + cjk + cjk + 'a' + eAcute + emoji + emoji + 'b';
+const plusMatches = Array.from(plusSubject.matchAll(/[^é]+/gu));
+assertEquals([2, 11], plusMatches.map(match => match.index));
+assertEquals([cjk + cjk + 'a', emoji + emoji + 'b'],
+             plusMatches.map(match => match[0]));
+
+check(/[é]+/u, eAcute + eAcute + cjk, 0, eAcute + eAcute);
+check(/[\uFFFD]+/u, raw(0x80, 0x81, 0x61), 0, raw(0x80, 0x81));
+
+const stickyPlus = /[^é]+/uy;
+stickyPlus.lastIndex = 2;
+check(stickyPlus, eAcute + cjk + cjk, 2, cjk + cjk);
+stickyPlus.lastIndex = 0;
+assertNull(stickyPlus.exec(eAcute + cjk));
