@@ -73,3 +73,40 @@ for (let i = 0; i < 2; ++i) {
   check(new RegExp('[^é]', 'u'), eAcute + cjk, 2, cjk);
   check(new RegExp('[\\uFFFD]', 'u'), raw(0x80), 0, raw(0x80));
 }
+
+function checkCaptures(regexp, subject, expectedIndex, expected, captures) {
+  const match = regexp.exec(subject);
+  assertNotNull(match);
+  assertEquals(expectedIndex, match.index);
+  assertEquals(byteValues(expected), byteValues(match[0]));
+  assertEquals(captures.map(byteValues), match.slice(1).map(byteValues));
+}
+
+checkCaptures(/([^é])/u, eAcute + cjk, 2, cjk, [cjk]);
+checkCaptures(/(([é-ë]))/u, cjk + eAcute, 3, eAcute, [eAcute, eAcute]);
+const namedCapture = /(?<value>[\uFFFD])/u.exec(raw(0x80));
+assertEquals(byteValues(raw(0x80)), byteValues(namedCapture.groups.value));
+
+const indexedCaptures = /(([^é]))/du.exec(eAcute + cjk);
+assertEquals([[2, 5], [2, 5], [2, 5]], indexedCaptures.indices);
+assertEquals(indexedCaptures.indices[1], indexedCaptures.indices[2]);
+
+const captureMatches = Array.from(
+    (eAcute + cjk).matchAll(/([^\x00-\x7f])/gu));
+assertEquals([0, 2], captureMatches.map(match => match.index));
+assertEquals([eAcute, cjk], captureMatches.map(match => match[1]));
+
+const nestedGlobalMatches = Array.from(
+    (eAcute + cjk).matchAll(/(([^\x00-\x7f]))/gu));
+assertEquals([0, 2], nestedGlobalMatches.map(match => match.index));
+assertEquals([eAcute, cjk], nestedGlobalMatches.map(match => match[1]));
+assertEquals([eAcute, cjk], nestedGlobalMatches.map(match => match[2]));
+
+const captureReplaceIndices = [];
+assertEquals('X(X', malformed.replace(/([\uFFFD])/gu,
+    (match, capture, index) => {
+      assertEquals(byteValues(match), byteValues(capture));
+      captureReplaceIndices.push(index);
+      return 'X';
+    }));
+assertEquals([0, 2], captureReplaceIndices);

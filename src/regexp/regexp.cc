@@ -468,10 +468,19 @@ RegExpTree* GetPositiveClassByteTree(RegExpTree* tree, RegExpFlags flags,
   return zone->New<RegExpDisjunction>(alternatives);
 }
 
-ZoneList<CharacterRange>* GetNode8DecoderClassRanges(RegExpTree* tree,
-                                                     RegExpFlags flags,
-                                                     Zone* zone,
-                                                     bool* is_negated) {
+RegExpTree* GetCaptureWrappedClass(RegExpTree* tree, int capture_count) {
+  int wrapper_count = 0;
+  while (tree->IsCapture()) {
+    wrapper_count++;
+    tree = tree->AsCapture()->body();
+  }
+  if (wrapper_count != capture_count || !tree->IsClassRanges()) return nullptr;
+  return tree;
+}
+
+ZoneList<CharacterRange>* GetNode8DecoderClassRanges(
+    RegExpTree* tree, RegExpFlags flags, Zone* zone, bool force_decoder,
+    bool* is_negated) {
   if (!tree->IsClassRanges()) return nullptr;
   RegExpClassRanges* character_class = tree->AsClassRanges();
   ZoneList<CharacterRange>* ranges = character_class->ranges(zone);
@@ -483,7 +492,7 @@ ZoneList<CharacterRange>* GetNode8DecoderClassRanges(RegExpTree* tree,
   }
 
   *is_negated = character_class->is_negated();
-  if (*is_negated) return ranges;
+  if (*is_negated || force_decoder) return ranges;
   for (CharacterRange range : *ranges) {
     if (range.Contains(unibrow::Utf8::kBadChar)) return ranges;
   }
@@ -623,11 +632,13 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
                              pattern->length() == 1 && pattern->Get(0) == '.';
     ZoneList<CharacterRange>* node8_class_ranges = nullptr;
     bool is_wtf8_class_negated = false;
+    RegExpTree* node8_class_tree = GetCaptureWrappedClass(
+        parse_result.tree, parse_result.capture_count);
     if (v8_flags.utf8_string_semantics && !is_wtf8_dot &&
-        !IsIgnoreCase(flags) &&
-        parse_result.capture_count == 0 && parse_result.tree->IsClassRanges()) {
+        !IsIgnoreCase(flags) && node8_class_tree != nullptr) {
       node8_class_ranges = GetNode8DecoderClassRanges(
-          parse_result.tree, flags, &zone, &is_wtf8_class_negated);
+          node8_class_tree, flags, &zone, parse_result.capture_count > 0,
+          &is_wtf8_class_negated);
       if (node8_class_ranges != nullptr &&
           ContainsMalformedNode8Bytes(pattern)) {
         node8_class_ranges = nullptr;
@@ -651,6 +662,9 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
       DirectHandle<TrustedByteArray> table =
           NewNode8ClassRangeTable(isolate, node8_class_ranges);
       re_data->set_node8_class_ranges(*table);
+      DirectHandle<FixedArray> capture_name_map =
+          CreateCaptureNameMap(isolate, parse_result.named_captures);
+      re_data->set_capture_name_map(capture_name_map);
     }
   }
   // Compilation succeeded so the data is set on the regexp
@@ -953,17 +967,18 @@ bool Node8ClassContains(Tagged<TrustedByteArray> ranges,
 
 int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
                          Tagged<TrustedByteArray> ranges, bool is_negated,
-                         int index, RegExpFlags flags, int32_t* output,
-                         int output_size) {
+                         int capture_count, int index, RegExpFlags flags,
+                         int32_t* output, int output_size) {
   DCHECK(subject.IsOneByte());
   DCHECK_GE(index, 0);
   DCHECK_LE(index, subject.length());
-  CHECK_EQ(output_size % JSRegExp::kAtomRegisterCount, 0);
+  const int registers_per_match =
+      JSRegExp::RegistersForCaptureCount(capture_count);
+  CHECK_GE(output_size, registers_per_match);
 
   const bool global = IsGlobal(flags);
   const bool sticky = IsSticky(flags);
-  const int max_matches =
-      global ? output_size / JSRegExp::kAtomRegisterCount : 1;
+  const int max_matches = global ? output_size / registers_per_match : 1;
   int matches = 0;
   base::Vector<const uint8_t> bytes = subject.ToByteVector();
   size_t position = index;
@@ -985,9 +1000,12 @@ int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
       continue;
     }
 
-    int offset = matches * JSRegExp::kAtomRegisterCount;
-    output[offset] = start;
-    output[offset + 1] = static_cast<int>(position);
+    int offset = matches * registers_per_match;
+    for (int capture = 0; capture <= capture_count; ++capture) {
+      output[offset + RegExpCapture::StartRegister(capture)] = start;
+      output[offset + RegExpCapture::EndRegister(capture)] =
+          static_cast<int>(position);
+    }
     matches++;
     if (!global) break;
   }
@@ -1025,7 +1043,8 @@ intptr_t RegExp::Wtf8ClassExecRaw(Isolate* isolate,
   DCHECK(data->has_node8_class_ranges());
   String::FlatContent subject_content = subject->GetFlatContent(no_gc);
   return Wtf8ClassExecRawImpl(subject_content, data->node8_class_ranges(),
-                              data->is_wtf8_class_negated(), index,
+                              data->is_wtf8_class_negated(),
+                              data->capture_count(), index,
                               JSRegExp::AsRegExpFlags(data->flags()),
                               result_offsets_vector,
                               result_offsets_vector_length);

@@ -2307,6 +2307,9 @@ void IrRegExpData::IrRegExpDataVerify(Isolate* isolate) {
   CHECK_IMPLIES(has_latin1_bytecode(), Is<TrustedByteArray>(latin1_bytecode()));
   CHECK_IMPLIES(has_uc16_bytecode(), Is<TrustedByteArray>(uc16_bytecode()));
   CHECK_IMPLIES(is_wtf8_class(), has_node8_class_ranges());
+  CHECK_IMPLIES(
+      is_wtf8_class(),
+      capture_name_map() != Smi::FromInt(JSRegExp::kUninitializedValue));
   CHECK_IMPLIES(!is_wtf8_class(), !has_node8_class_ranges());
   CHECK_IMPLIES(is_wtf8_class_negated(), is_wtf8_class());
   if (has_node8_class_ranges()) {
