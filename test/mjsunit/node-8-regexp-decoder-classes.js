@@ -139,3 +139,38 @@ stickyPlus.lastIndex = 2;
 check(stickyPlus, eAcute + cjk + cjk, 2, cjk + cjk);
 stickyPlus.lastIndex = 0;
 assertNull(stickyPlus.exec(eAcute + cjk));
+
+check(/[^é]*/u, cjk + cjk + eAcute, 0, cjk + cjk);
+check(/[é]*/u, eAcute + eAcute + cjk, 0, eAcute + eAcute);
+check(/[é]*/u, cjk, 0, '');
+check(/[\uFFFD]*/u, raw(0x80, 0x81, 0x61), 0, raw(0x80, 0x81));
+
+const replacementStarMatches = Array.from(
+    raw(0x80, 0x61, 0x81).matchAll(/[\uFFFD]*/gu));
+assertEquals([0, 1, 2, 3],
+             replacementStarMatches.map(match => match.index));
+assertEquals([[0x80], [], [0x81], []],
+             replacementStarMatches.map(match => byteValues(match[0])));
+assertEquals('XXaXX', raw(0x80, 0x61, 0x81).replace(/[\uFFFD]*/gu, 'X'));
+
+const continuationStarMatches = Array.from(eAcute.matchAll(/[\uFFFD]*/gu));
+assertEquals([0, 1, 2], continuationStarMatches.map(match => match.index));
+assertEquals([[], [0xa9], []],
+             continuationStarMatches.map(match => byteValues(match[0])));
+
+const asciiClassStarSubject = cjk + '\n' + cjk;
+const asciiClassStarMatches = Array.from(
+    asciiClassStarSubject.matchAll(/[^\n]*/gu));
+assertEquals([0, 3, 4, 7],
+             asciiClassStarMatches.map(match => match.index));
+assertEquals([cjk, '', cjk, ''],
+             asciiClassStarMatches.map(match => match[0]));
+
+const stickyStar = /[^é]*/uy;
+stickyStar.lastIndex = 2;
+check(stickyStar, eAcute + cjk + cjk, 2, cjk + cjk);
+stickyStar.lastIndex = 0;
+check(stickyStar, eAcute + cjk, 0, '');
+
+const indexedStar = /[^é]*/du.exec(cjk + eAcute);
+assertEquals([0, 3], indexedStar.indices[0]);
