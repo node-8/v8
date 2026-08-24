@@ -555,7 +555,7 @@ RegExpNode* RegExpClassRanges::ToNodeImpl(RegExpCompiler* compiler,
   Zone* const zone = compiler->zone();
   ZoneList<CharacterRange>* ranges = this->ranges(zone);
 
-  if (compiler->IsNode8Wtf8BoundedClass(this)) {
+  if (compiler->IsNode8Wtf8ScalarClass(this)) {
     DCHECK(is_negated());
     DCHECK_EQ(ranges->length(), 1);
     DCHECK_LE(ranges->first().to(), 0x7f);
