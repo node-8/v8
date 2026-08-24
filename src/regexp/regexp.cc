@@ -986,12 +986,16 @@ int Wtf8DotExecRawImpl(const String::FlatContent& subject, int index,
   return matches;
 }
 
-bool Node8ClassContains(Tagged<TrustedByteArray> ranges,
-                        unibrow::uchar code_point) {
+V8_INLINE bool Node8ClassContains(Tagged<TrustedByteArray> ranges,
+                                  int range_count,
+                                  unibrow::uchar code_point) {
   static constexpr int kBytesPerRange = 2 * sizeof(uint32_t);
-  CHECK_EQ(ranges->length() % kBytesPerRange, 0);
+  if (V8_LIKELY(range_count == 1)) {
+    return code_point >= ranges->get_int(0) &&
+           code_point <= ranges->get_int(sizeof(uint32_t));
+  }
   int low = 0;
-  int high = ranges->length() / kBytesPerRange;
+  int high = range_count;
   while (low < high) {
     int middle = low + (high - low) / 2;
     int offset = middle * kBytesPerRange;
@@ -1037,6 +1041,9 @@ int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
   const int max_matches = global ? output_size / registers_per_match : 1;
   int matches = 0;
   base::Vector<const uint8_t> bytes = subject.ToByteVector();
+  static constexpr int kBytesPerRange = 2 * sizeof(uint32_t);
+  CHECK_EQ(ranges->length() % kBytesPerRange, 0);
+  const int range_count = ranges->length() / kBytesPerRange;
   size_t position = index;
   if (can_be_zero_length) {
     DCHECK_EQ(capture_count, 0);
@@ -1047,7 +1054,7 @@ int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
         size_t next_position = position;
         unibrow::uchar code_point =
             DecodeNode8ClassCodePoint(bytes, &next_position);
-        bool is_match = Node8ClassContains(ranges, code_point);
+        bool is_match = Node8ClassContains(ranges, range_count, code_point);
         if (is_negated) is_match = !is_match;
         if (is_match) {
           position = next_position;
@@ -1055,7 +1062,7 @@ int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
           while (is_run && position < bytes.size()) {
             next_position = position;
             code_point = DecodeNode8ClassCodePoint(bytes, &next_position);
-            is_match = Node8ClassContains(ranges, code_point);
+            is_match = Node8ClassContains(ranges, range_count, code_point);
             if (is_negated) is_match = !is_match;
             if (!is_match) break;
             position = next_position;
@@ -1084,7 +1091,7 @@ int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
     int start = static_cast<int>(position);
     unibrow::uchar code_point =
         DecodeNode8ClassCodePoint(bytes, &position);
-    bool is_match = Node8ClassContains(ranges, code_point);
+    bool is_match = Node8ClassContains(ranges, range_count, code_point);
     if (is_negated) is_match = !is_match;
     if (!is_match) {
       if (sticky) break;
@@ -1096,7 +1103,8 @@ int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
       while (position < bytes.size()) {
         unibrow::uchar next_code_point =
             DecodeNode8ClassCodePoint(bytes, &position);
-        bool next_is_match = Node8ClassContains(ranges, next_code_point);
+        bool next_is_match =
+            Node8ClassContains(ranges, range_count, next_code_point);
         if (is_negated) next_is_match = !next_is_match;
         if (!next_is_match) break;
         match_end = position;
