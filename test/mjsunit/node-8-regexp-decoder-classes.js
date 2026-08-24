@@ -210,3 +210,25 @@ check(stickyOptional, eAcute + cjk, 0, '');
 
 const indexedOptional = /[^é]?/du.exec(cjk + eAcute);
 assertEquals([0, 3], indexedOptional.indices[0]);
+
+const eCircumflex = String.fromCodePoint(0xea);
+check(/[é-ë]{2}/u, cjk + eAcute + eCircumflex, 3,
+      eAcute + eCircumflex);
+check(/[^a]{2}/u, 'a' + cjk + emoji + 'a', 1, cjk + emoji);
+check(/[\uFFFD]{2}/u, raw(0x80, 0xe2, 0x82, 0x61), 0,
+      raw(0x80, 0xe2, 0x82));
+
+const exactGlobalMatches = Array.from(
+    eAcute.repeat(5).matchAll(/[é]{2}/gu));
+assertEquals([0, 4], exactGlobalMatches.map(match => match.index));
+assertEquals([eAcute.repeat(2), eAcute.repeat(2)],
+             exactGlobalMatches.map(match => match[0]));
+
+check(/[é]{2}/u, eAcute + 'a' + eAcute.repeat(2), 3,
+      eAcute.repeat(2));
+
+const stickyExact = /[^a]{2}/uy;
+stickyExact.lastIndex = 1;
+check(stickyExact, eAcute + 'b', 1, raw(0xa9) + 'b');
+stickyExact.lastIndex = 0;
+assertNull(stickyExact.exec('a' + cjk));
