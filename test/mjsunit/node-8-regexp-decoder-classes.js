@@ -125,6 +125,15 @@ assertEquals([cjk + cjk + 'a', emoji + emoji + 'b'],
 check(/[é]+/u, eAcute + eAcute + cjk, 0, eAcute + eAcute);
 check(/[\uFFFD]+/u, raw(0x80, 0x81, 0x61), 0, raw(0x80, 0x81));
 
+const asciiClassPlusSubject = cjk + cjk + '\n' + cjk;
+const asciiClassPlusMatches = Array.from(
+    asciiClassPlusSubject.matchAll(/[^\n]+/gu));
+assertEquals([0, 7], asciiClassPlusMatches.map(match => match.index));
+assertEquals([cjk + cjk, cjk],
+             asciiClassPlusMatches.map(match => match[0]));
+check(/[a-z]+/u, cjk + 'node' + cjk, 3, 'node');
+check(/[^a]+/u, raw(0x80, 0x81) + 'a', 0, raw(0x80, 0x81));
+
 const stickyPlus = /[^é]+/uy;
 stickyPlus.lastIndex = 2;
 check(stickyPlus, eAcute + cjk + cjk, 2, cjk + cjk);

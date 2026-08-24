@@ -651,6 +651,16 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
           node8_class_tree, flags, &zone,
           parse_result.capture_count > 0 || is_wtf8_class_plus,
           &is_wtf8_class_negated);
+      // A greedy run has the same byte endpoints when every non-ASCII scalar
+      // has uniform class membership, so keep the optimized Irregexp path.
+      if (is_wtf8_class_plus && node8_class_ranges != nullptr &&
+          (node8_class_ranges->is_empty() ||
+           node8_class_ranges->at(node8_class_ranges->length() - 1).to() <=
+               unibrow::Utf8::kMaxOneByteChar)) {
+        node8_class_ranges = nullptr;
+        is_wtf8_class_negated = false;
+        is_wtf8_class_plus = false;
+      }
       if (node8_class_ranges != nullptr &&
           ContainsMalformedNode8Bytes(pattern)) {
         node8_class_ranges = nullptr;
