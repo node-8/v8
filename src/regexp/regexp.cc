@@ -633,44 +633,61 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
     ZoneList<CharacterRange>* node8_class_ranges = nullptr;
     bool is_wtf8_class_negated = false;
     bool is_wtf8_class_run = false;
+    bool is_wtf8_class_optional = false;
     RegExpTree* node8_class_tree = GetCaptureWrappedClass(
         parse_result.tree, parse_result.capture_count);
     if (node8_class_tree == nullptr && parse_result.capture_count == 0 &&
         parse_result.tree->IsQuantifier()) {
       RegExpQuantifier* quantifier = parse_result.tree->AsQuantifier();
-      if ((quantifier->min() == 0 || quantifier->min() == 1) &&
-          quantifier->max() == RegExpTree::kInfinity &&
-          quantifier->is_greedy() && quantifier->body()->IsClassRanges()) {
-        node8_class_tree = quantifier->body();
-        // CanBeZeroLength distinguishes star from plus for this run bit.
-        is_wtf8_class_run = true;
+      if (quantifier->is_greedy() && quantifier->body()->IsClassRanges()) {
+        if ((quantifier->min() == 0 || quantifier->min() == 1) &&
+            quantifier->max() == RegExpTree::kInfinity) {
+          // CanBeZeroLength distinguishes star from plus for this run bit.
+          is_wtf8_class_run = true;
+        } else if (quantifier->min() == 0 && quantifier->max() == 1) {
+          is_wtf8_class_optional = true;
+        }
+        if (is_wtf8_class_run || is_wtf8_class_optional) {
+          node8_class_tree = quantifier->body();
+        }
       }
     }
     if (v8_flags.utf8_string_semantics && !is_wtf8_dot &&
         !IsIgnoreCase(flags) && node8_class_tree != nullptr) {
       node8_class_ranges = GetNode8DecoderClassRanges(
           node8_class_tree, flags, &zone,
-          parse_result.capture_count > 0 || is_wtf8_class_run,
+          parse_result.capture_count > 0 || is_wtf8_class_run ||
+              is_wtf8_class_optional,
           &is_wtf8_class_negated);
-      // A greedy run has the same byte endpoints when every non-ASCII scalar
-      // has uniform class membership, so keep the optimized Irregexp path.
-      if (is_wtf8_class_run && node8_class_ranges != nullptr &&
+      const bool has_only_ascii_ranges =
+          node8_class_ranges != nullptr &&
           (node8_class_ranges->is_empty() ||
            node8_class_ranges->at(node8_class_ranges->length() - 1).to() <=
-               unibrow::Utf8::kMaxOneByteChar)) {
+               unibrow::Utf8::kMaxOneByteChar);
+      // A greedy run has the same byte endpoints when every non-ASCII scalar
+      // has uniform membership. An optional positive ASCII class also has the
+      // same empty endpoint, while a negated class must consume the scalar.
+      if (has_only_ascii_ranges &&
+          (is_wtf8_class_run ||
+           (is_wtf8_class_optional && !is_wtf8_class_negated))) {
         node8_class_ranges = nullptr;
         is_wtf8_class_negated = false;
         is_wtf8_class_run = false;
+        is_wtf8_class_optional = false;
       }
       if (node8_class_ranges != nullptr &&
           ContainsMalformedNode8Bytes(pattern)) {
         node8_class_ranges = nullptr;
         is_wtf8_class_negated = false;
         is_wtf8_class_run = false;
+        is_wtf8_class_optional = false;
       }
     }
     const bool is_wtf8_class = node8_class_ranges != nullptr;
-    if (!is_wtf8_class) is_wtf8_class_run = false;
+    if (!is_wtf8_class) {
+      is_wtf8_class_run = false;
+      is_wtf8_class_optional = false;
+    }
     using Bits = IrRegExpData::Bits;
     const uint32_t bit_field =
         Bits::CanBeZeroLengthBit::encode(can_be_zero_length) |
@@ -1005,9 +1022,9 @@ V8_INLINE unibrow::uchar DecodeNode8ClassCodePoint(
 
 int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
                          Tagged<TrustedByteArray> ranges, bool is_negated,
-                         bool is_run, bool is_star, int capture_count,
-                         int index, RegExpFlags flags, int32_t* output,
-                         int output_size) {
+                         bool is_run, bool can_be_zero_length,
+                         int capture_count, int index, RegExpFlags flags,
+                         int32_t* output, int output_size) {
   DCHECK(subject.IsOneByte());
   DCHECK_GE(index, 0);
   DCHECK_LE(index, subject.length());
@@ -1021,21 +1038,30 @@ int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
   int matches = 0;
   base::Vector<const uint8_t> bytes = subject.ToByteVector();
   size_t position = index;
-  if (is_star) {
-    DCHECK(is_run);
+  if (can_be_zero_length) {
     DCHECK_EQ(capture_count, 0);
     while (matches < max_matches && position <= bytes.size()) {
       int start = static_cast<int>(position);
       size_t match_end = position;
-      while (position < bytes.size()) {
+      if (position < bytes.size()) {
         size_t next_position = position;
         unibrow::uchar code_point =
             DecodeNode8ClassCodePoint(bytes, &next_position);
         bool is_match = Node8ClassContains(ranges, code_point);
         if (is_negated) is_match = !is_match;
-        if (!is_match) break;
-        position = next_position;
-        match_end = position;
+        if (is_match) {
+          position = next_position;
+          match_end = position;
+          while (is_run && position < bytes.size()) {
+            next_position = position;
+            code_point = DecodeNode8ClassCodePoint(bytes, &next_position);
+            is_match = Node8ClassContains(ranges, code_point);
+            if (is_negated) is_match = !is_match;
+            if (!is_match) break;
+            position = next_position;
+            match_end = position;
+          }
+        }
       }
 
       int offset = matches * registers_per_match;
@@ -1122,8 +1148,7 @@ intptr_t RegExp::Wtf8ClassExecRaw(Isolate* isolate,
   return Wtf8ClassExecRawImpl(subject_content, data->node8_class_ranges(),
                               data->is_wtf8_class_negated(),
                               data->is_wtf8_class_plus(),
-                              data->is_wtf8_class_plus() &&
-                                  data->can_be_zero_length(),
+                              data->can_be_zero_length(),
                               data->capture_count(), index,
                               JSRegExp::AsRegExpFlags(data->flags()),
                               result_offsets_vector,

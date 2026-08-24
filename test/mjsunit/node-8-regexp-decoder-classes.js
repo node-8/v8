@@ -174,3 +174,39 @@ check(stickyStar, eAcute + cjk, 0, '');
 
 const indexedStar = /[^é]*/du.exec(cjk + eAcute);
 assertEquals([0, 3], indexedStar.indices[0]);
+
+check(/[^é]?/u, cjk + eAcute, 0, cjk);
+check(/[é]?/u, eAcute + cjk, 0, eAcute);
+check(/[é]?/u, cjk, 0, '');
+check(/[\uFFFD]?/u, raw(0x80, 0x81), 0, raw(0x80));
+
+const replacementOptionalMatches = Array.from(
+    raw(0x80, 0x81, 0x61).matchAll(/[\uFFFD]?/gu));
+assertEquals([0, 1, 2, 3],
+             replacementOptionalMatches.map(match => match.index));
+assertEquals([[0x80], [0x81], [], []],
+             replacementOptionalMatches.map(match => byteValues(match[0])));
+
+const negatedAsciiOptionalSubject = cjk + 'a';
+const negatedAsciiOptionalMatches = Array.from(
+    negatedAsciiOptionalSubject.matchAll(/[^a]?/gu));
+assertEquals([0, 3, 4],
+             negatedAsciiOptionalMatches.map(match => match.index));
+assertEquals([cjk, '', ''],
+             negatedAsciiOptionalMatches.map(match => match[0]));
+
+const positiveAsciiOptionalMatches = Array.from(
+    (cjk + 'a').matchAll(/[a-z]?/gu));
+assertEquals([0, 1, 2, 3, 4],
+             positiveAsciiOptionalMatches.map(match => match.index));
+assertEquals(['', '', '', 'a', ''],
+             positiveAsciiOptionalMatches.map(match => match[0]));
+
+const stickyOptional = /[^é]?/uy;
+stickyOptional.lastIndex = 2;
+check(stickyOptional, eAcute + cjk, 2, cjk);
+stickyOptional.lastIndex = 0;
+check(stickyOptional, eAcute + cjk, 0, '');
+
+const indexedOptional = /[^é]?/du.exec(cjk + eAcute);
+assertEquals([0, 3], indexedOptional.indices[0]);
