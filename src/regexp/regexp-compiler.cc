@@ -4184,14 +4184,20 @@ RegExpNode* RegExpCompiler::PreprocessRegExp(RegExpCompileData* data,
 #endif
   TRACE_GRAPH_WITH_NODE("* Preprocess RegExp ", data->tree);
   REGISTER_NODE(accept());
-  if (v8_flags.utf8_string_semantics && is_one_byte && !IsIgnoreCase(flags()) &&
-      data->capture_count == 0) {
+  if (v8_flags.utf8_string_semantics && is_one_byte && !IsIgnoreCase(flags())) {
     RegExpQuantifier* quantifier = nullptr;
     bool quantifier_is_complete_tree = false;
-    if (data->tree->IsQuantifier()) {
-      quantifier = data->tree->AsQuantifier();
+    RegExpTree* unwrapped_tree = data->tree;
+    int outer_capture_count = 0;
+    while (unwrapped_tree->IsCapture()) {
+      outer_capture_count++;
+      unwrapped_tree = unwrapped_tree->AsCapture()->body();
+    }
+    if (outer_capture_count == data->capture_count &&
+        unwrapped_tree->IsQuantifier()) {
+      quantifier = unwrapped_tree->AsQuantifier();
       quantifier_is_complete_tree = true;
-    } else if (data->tree->IsAlternative()) {
+    } else if (data->capture_count == 0 && data->tree->IsAlternative()) {
       for (RegExpTree* term : *data->tree->AsAlternative()->nodes()) {
         if (!term->IsQuantifier()) continue;
         if (quantifier != nullptr) {
@@ -4204,7 +4210,8 @@ RegExpNode* RegExpCompiler::PreprocessRegExp(RegExpCompileData* data,
     if (quantifier != nullptr) {
       const int optional_iterations = quantifier->max() - quantifier->min();
       const bool use_greedy_bounded =
-          quantifier->is_greedy() && quantifier->min() < quantifier->max() &&
+          data->capture_count == 0 && quantifier->is_greedy() &&
+          quantifier->min() < quantifier->max() &&
           quantifier->min() <= 2 && quantifier->max() <= 5 &&
           optional_iterations <= 3;
       const bool use_non_greedy =
