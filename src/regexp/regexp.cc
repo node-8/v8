@@ -499,14 +499,13 @@ ZoneList<CharacterRange>* GetNode8DecoderClassRanges(
   return nullptr;
 }
 
-constexpr uint32_t kNode8ClassExactRepetitionTag = uint32_t{1} << 31;
-constexpr uint32_t kNode8ClassExactRepetitionMarker = 0x4e384551;
+constexpr uint32_t kNode8ClassBoundTag = uint32_t{1} << 31;
 
 DirectHandle<TrustedByteArray> NewNode8ClassRangeTable(
     Isolate* isolate, ZoneList<CharacterRange>* ranges,
-    int exact_repetition) {
+    int min_repetition, int max_repetition) {
   static constexpr int kBytesPerRange = 2 * sizeof(uint32_t);
-  const int metadata_records = exact_repetition >= 0 ? 1 : 0;
+  const int metadata_records = min_repetition >= 0 ? 1 : 0;
   CHECK_LE(ranges->length() + metadata_records,
            TrustedByteArray::kMaxLength / kBytesPerRange);
   DirectHandle<TrustedByteArray> table =
@@ -516,14 +515,17 @@ DirectHandle<TrustedByteArray> NewNode8ClassRangeTable(
     table->set_int(i * kBytesPerRange, ranges->at(i).from());
     table->set_int(i * kBytesPerRange + sizeof(uint32_t), ranges->at(i).to());
   }
-  if (exact_repetition >= 0) {
-    CHECK_LE(exact_repetition, RegExpTree::kInfinity);
+  if (min_repetition >= 0) {
+    CHECK_LE(0, min_repetition);
+    CHECK_LE(min_repetition, max_repetition);
+    CHECK_LE(max_repetition, RegExpTree::kInfinity);
     const int offset = ranges->length() * kBytesPerRange;
     table->set_int(
-        offset, kNode8ClassExactRepetitionTag |
-                    static_cast<uint32_t>(exact_repetition));
+        offset,
+        kNode8ClassBoundTag | static_cast<uint32_t>(min_repetition));
     table->set_int(offset + sizeof(uint32_t),
-                   kNode8ClassExactRepetitionMarker);
+                   kNode8ClassBoundTag |
+                       static_cast<uint32_t>(max_repetition));
   }
   return table;
 }
@@ -649,7 +651,8 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
     bool is_wtf8_class_negated = false;
     bool is_wtf8_class_run = false;
     bool is_wtf8_class_optional = false;
-    int node8_class_exact_repetition = -1;
+    int node8_class_min_repetition = -1;
+    int node8_class_max_repetition = -1;
     RegExpTree* node8_class_tree = GetCaptureWrappedClass(
         parse_result.tree, parse_result.capture_count);
     if (node8_class_tree == nullptr && parse_result.capture_count == 0 &&
@@ -662,12 +665,14 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
           is_wtf8_class_run = true;
         } else if (quantifier->min() == 0 && quantifier->max() == 1) {
           is_wtf8_class_optional = true;
-        } else if (quantifier->min() >= 2 &&
-                   quantifier->min() == quantifier->max()) {
-          node8_class_exact_repetition = quantifier->min();
+        } else if (quantifier->max() >= 2 &&
+                   (quantifier->max() < RegExpTree::kInfinity ||
+                    quantifier->min() == quantifier->max())) {
+          node8_class_min_repetition = quantifier->min();
+          node8_class_max_repetition = quantifier->max();
         }
         if (is_wtf8_class_run || is_wtf8_class_optional ||
-            node8_class_exact_repetition >= 0) {
+            node8_class_min_repetition >= 0) {
           node8_class_tree = quantifier->body();
         }
       }
@@ -677,7 +682,7 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
       node8_class_ranges = GetNode8DecoderClassRanges(
           node8_class_tree, flags, &zone,
           parse_result.capture_count > 0 || is_wtf8_class_run ||
-              is_wtf8_class_optional || node8_class_exact_repetition >= 0,
+              is_wtf8_class_optional || node8_class_min_repetition >= 0,
           &is_wtf8_class_negated);
       const bool has_only_ascii_ranges =
           node8_class_ranges != nullptr &&
@@ -689,13 +694,14 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
       // have the same endpoints, while a negated class must consume scalars.
       if (has_only_ascii_ranges &&
           (is_wtf8_class_run ||
-           ((is_wtf8_class_optional || node8_class_exact_repetition >= 0) &&
+           ((is_wtf8_class_optional || node8_class_min_repetition >= 0) &&
             !is_wtf8_class_negated))) {
         node8_class_ranges = nullptr;
         is_wtf8_class_negated = false;
         is_wtf8_class_run = false;
         is_wtf8_class_optional = false;
-        node8_class_exact_repetition = -1;
+        node8_class_min_repetition = -1;
+        node8_class_max_repetition = -1;
       }
       if (node8_class_ranges != nullptr &&
           ContainsMalformedNode8Bytes(pattern)) {
@@ -703,14 +709,16 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
         is_wtf8_class_negated = false;
         is_wtf8_class_run = false;
         is_wtf8_class_optional = false;
-        node8_class_exact_repetition = -1;
+        node8_class_min_repetition = -1;
+        node8_class_max_repetition = -1;
       }
     }
     const bool is_wtf8_class = node8_class_ranges != nullptr;
     if (!is_wtf8_class) {
       is_wtf8_class_run = false;
       is_wtf8_class_optional = false;
-      node8_class_exact_repetition = -1;
+      node8_class_min_repetition = -1;
+      node8_class_max_repetition = -1;
     }
     using Bits = IrRegExpData::Bits;
     const uint32_t bit_field =
@@ -728,7 +736,8 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
           direct_handle(SbxCast<IrRegExpData>(re->data(isolate)), isolate);
       DirectHandle<TrustedByteArray> table =
           NewNode8ClassRangeTable(isolate, node8_class_ranges,
-                                  node8_class_exact_repetition);
+                                  node8_class_min_repetition,
+                                  node8_class_max_repetition);
       re_data->set_node8_class_ranges(*table);
       DirectHandle<FixedArray> capture_name_map =
           CreateCaptureNameMap(isolate, parse_result.named_captures);
@@ -1069,16 +1078,22 @@ int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
   static constexpr int kBytesPerRange = 2 * sizeof(uint32_t);
   CHECK_EQ(ranges->length() % kBytesPerRange, 0);
   int range_count = ranges->length() / kBytesPerRange;
-  int exact_repetition = -1;
+  int min_repetition = -1;
+  int max_repetition = -1;
   if (range_count > 0) {
     const int metadata_offset = (range_count - 1) * kBytesPerRange;
-    const uint32_t encoded_repetition = ranges->get_int(metadata_offset);
-    if ((encoded_repetition & kNode8ClassExactRepetitionTag) != 0) {
-      CHECK_EQ(ranges->get_int(metadata_offset + sizeof(uint32_t)),
-               kNode8ClassExactRepetitionMarker);
-      exact_repetition = static_cast<int>(
-          encoded_repetition & ~kNode8ClassExactRepetitionTag);
-      CHECK_GE(exact_repetition, 2);
+    const uint32_t encoded_min = ranges->get_int(metadata_offset);
+    if ((encoded_min & kNode8ClassBoundTag) != 0) {
+      const uint32_t encoded_max =
+          ranges->get_int(metadata_offset + sizeof(uint32_t));
+      CHECK_NE(encoded_max & kNode8ClassBoundTag, 0);
+      min_repetition =
+          static_cast<int>(encoded_min & ~kNode8ClassBoundTag);
+      max_repetition =
+          static_cast<int>(encoded_max & ~kNode8ClassBoundTag);
+      CHECK_LE(0, min_repetition);
+      CHECK_LE(min_repetition, max_repetition);
+      CHECK_LE(max_repetition, RegExpTree::kInfinity);
       range_count--;
     }
   }
@@ -1087,7 +1102,7 @@ int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
   const uint32_t single_range_to =
       range_count == 1 ? ranges->get_int(sizeof(uint32_t)) : 0;
   size_t position = index;
-  if (exact_repetition >= 0) {
+  if (min_repetition >= 0 && min_repetition == max_repetition) {
     DCHECK_EQ(capture_count, 0);
     int repeated = 0;
     size_t run_start = position;
@@ -1107,7 +1122,7 @@ int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
 
       if (repeated == 0) run_start = scalar_start;
       repeated++;
-      if (repeated < exact_repetition) continue;
+      if (repeated < max_repetition) continue;
 
       int offset = matches * registers_per_match;
       output[offset + RegExpCapture::StartRegister(0)] =
@@ -1117,6 +1132,93 @@ int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
       matches++;
       if (!global) break;
       repeated = 0;
+    }
+    return matches;
+  }
+  if (min_repetition == 0) {
+    DCHECK_EQ(capture_count, 0);
+    while (matches < max_matches && position <= bytes.size()) {
+      size_t start = position;
+      size_t match_end = position;
+      int repeated = 0;
+      while (repeated < max_repetition && match_end < bytes.size()) {
+        size_t next_position = match_end;
+        unibrow::uchar code_point =
+            DecodeNode8ClassCodePoint(bytes, &next_position);
+        bool is_match = Node8ClassContains(
+            ranges, range_count, single_range_from, single_range_to,
+            code_point);
+        if (is_negated) is_match = !is_match;
+        if (!is_match) break;
+        match_end = next_position;
+        repeated++;
+      }
+
+      int offset = matches * registers_per_match;
+      output[offset + RegExpCapture::StartRegister(0)] =
+          static_cast<int>(start);
+      output[offset + RegExpCapture::EndRegister(0)] =
+          static_cast<int>(match_end);
+      matches++;
+      if (!global) break;
+      if (match_end == start) {
+        if (match_end == bytes.size()) break;
+        position = match_end + 1;
+      } else {
+        position = match_end;
+      }
+    }
+    return matches;
+  }
+  if (min_repetition > 0) {
+    DCHECK_EQ(capture_count, 0);
+    int repeated = 0;
+    size_t run_start = position;
+    while (matches < max_matches && position < bytes.size()) {
+      size_t scalar_start = position;
+      unibrow::uchar code_point =
+          DecodeNode8ClassCodePoint(bytes, &position);
+      bool is_match = Node8ClassContains(ranges, range_count,
+                                         single_range_from, single_range_to,
+                                         code_point);
+      if (is_negated) is_match = !is_match;
+      if (!is_match) {
+        if (repeated >= min_repetition) {
+          int offset = matches * registers_per_match;
+          output[offset + RegExpCapture::StartRegister(0)] =
+              static_cast<int>(run_start);
+          output[offset + RegExpCapture::EndRegister(0)] =
+              static_cast<int>(scalar_start);
+          matches++;
+          repeated = 0;
+          if (!global || matches == max_matches || sticky) break;
+        } else if (sticky) {
+          break;
+        }
+        repeated = 0;
+        continue;
+      }
+
+      if (repeated == 0) run_start = scalar_start;
+      repeated++;
+      if (repeated < max_repetition) continue;
+
+      int offset = matches * registers_per_match;
+      output[offset + RegExpCapture::StartRegister(0)] =
+          static_cast<int>(run_start);
+      output[offset + RegExpCapture::EndRegister(0)] =
+          static_cast<int>(position);
+      matches++;
+      repeated = 0;
+      if (!global) break;
+    }
+    if (matches < max_matches && repeated >= min_repetition) {
+      int offset = matches * registers_per_match;
+      output[offset + RegExpCapture::StartRegister(0)] =
+          static_cast<int>(run_start);
+      output[offset + RegExpCapture::EndRegister(0)] =
+          static_cast<int>(position);
+      matches++;
     }
     return matches;
   }
