@@ -16,6 +16,7 @@
 #include "src/base/small-vector.h"
 #include "src/bigint/bigint.h"
 #include "src/common/assert-scope.h"
+#include "src/flags/flags.h"
 #include "src/handles/handles.h"
 #include "src/heap/factory.h"
 #include "src/objects/bigint.h"
@@ -365,8 +366,43 @@ bool SubStringEquals(const Char** current, const Char* end,
 
 // Returns true if a nonspace character has been found and false if the
 // end was been reached before finding a nonspace character.
+V8_INLINE size_t Wtf8WhiteSpaceLength(const uint8_t* current,
+                                      const uint8_t* end) {
+  const uint8_t first = *current;
+  if (first < 0x80) {
+    return first == 0x20 || (first >= 0x09 && first <= 0x0D) ? 1 : 0;
+  }
+
+  if (first == 0xC2 && end - current >= 2 && current[1] == 0xA0) return 2;
+  if (end - current < 3) return 0;
+
+  const uint8_t second = current[1];
+  const uint8_t third = current[2];
+  if (first == 0xE1 && second == 0x9A && third == 0x80) return 3;
+  if (first == 0xE2 && second == 0x80 &&
+      ((third >= 0x80 && third <= 0x8A) || third == 0xA8 || third == 0xA9 ||
+       third == 0xAF)) {
+    return 3;
+  }
+  if (first == 0xE2 && second == 0x81 && third == 0x9F) return 3;
+  if (first == 0xE3 && second == 0x80 && third == 0x80) return 3;
+  if (first == 0xEF && second == 0xBB && third == 0xBF) return 3;
+  return 0;
+}
+
 template <class Char>
 inline bool AdvanceToNonspace(const Char** current, const Char* end) {
+  if constexpr (std::is_same_v<Char, uint8_t>) {
+    if (v8_flags.utf8_string_semantics) {
+      while (*current != end) {
+        const size_t whitespace_length = Wtf8WhiteSpaceLength(*current, end);
+        if (whitespace_length == 0) return true;
+        *current += whitespace_length;
+      }
+      return false;
+    }
+  }
+
   while (*current != end) {
     if (!IsWhiteSpaceOrLineTerminator(**current)) return true;
     ++*current;
@@ -1537,6 +1573,15 @@ std::optional<double> TryStringToDouble(LocalIsolate* isolate,
   uint32_t length = object->length();
   if (length > max_length_for_conversion) {
     return std::nullopt;
+  }
+
+  if (v8_flags.utf8_string_semantics &&
+      String::IsOneByteRepresentationUnderneath(*object)) {
+    auto buffer = std::make_unique<uint8_t[]>(max_length_for_conversion);
+    SharedStringAccessGuardIfNeeded access_guard(isolate);
+    String::WriteToFlat(*object, buffer.get(), 0, length, access_guard);
+    base::Vector<const uint8_t> v(buffer.get(), length);
+    return StringToDouble(v, ALLOW_NON_DECIMAL_PREFIX);
   }
 
   auto buffer = std::make_unique<base::uc16[]>(max_length_for_conversion);
