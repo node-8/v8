@@ -652,10 +652,10 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
     int node8_class_exact_repetition = -1;
     RegExpTree* node8_class_tree = GetCaptureWrappedClass(
         parse_result.tree, parse_result.capture_count);
-    if (node8_class_tree == nullptr && parse_result.capture_count == 0 &&
-        parse_result.tree->IsQuantifier()) {
+    if (node8_class_tree == nullptr && parse_result.tree->IsQuantifier()) {
       RegExpQuantifier* quantifier = parse_result.tree->AsQuantifier();
-      if (quantifier->is_greedy() && quantifier->body()->IsClassRanges()) {
+      if (parse_result.capture_count == 0 && quantifier->is_greedy() &&
+          quantifier->body()->IsClassRanges()) {
         if ((quantifier->min() == 0 || quantifier->min() == 1) &&
             quantifier->max() == RegExpTree::kInfinity) {
           // CanBeZeroLength distinguishes star from plus for this run bit.
@@ -669,6 +669,14 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
         if (is_wtf8_class_run || is_wtf8_class_optional ||
             node8_class_exact_repetition >= 0) {
           node8_class_tree = quantifier->body();
+        }
+      } else if (parse_result.capture_count > 0 &&
+                 quantifier->is_non_greedy() && quantifier->min() == 2 &&
+                 quantifier->max() == 2) {
+        node8_class_tree = GetCaptureWrappedClass(
+            quantifier->body(), parse_result.capture_count);
+        if (node8_class_tree != nullptr) {
+          node8_class_exact_repetition = 2;
         }
       }
     }
@@ -1088,7 +1096,6 @@ int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
       range_count == 1 ? ranges->get_int(sizeof(uint32_t)) : 0;
   size_t position = index;
   if (exact_repetition >= 0) {
-    DCHECK_EQ(capture_count, 0);
     int repeated = 0;
     size_t run_start = position;
     while (matches < max_matches && position < bytes.size()) {
@@ -1114,6 +1121,12 @@ int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
           static_cast<int>(run_start);
       output[offset + RegExpCapture::EndRegister(0)] =
           static_cast<int>(position);
+      for (int capture = 1; capture <= capture_count; ++capture) {
+        output[offset + RegExpCapture::StartRegister(capture)] =
+            static_cast<int>(scalar_start);
+        output[offset + RegExpCapture::EndRegister(capture)] =
+            static_cast<int>(position);
+      }
       matches++;
       if (!global) break;
       repeated = 0;
