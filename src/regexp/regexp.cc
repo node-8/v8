@@ -1058,6 +1058,102 @@ V8_INLINE unibrow::uchar DecodeNode8ClassCodePoint(
   return code_point;
 }
 
+template <int kMaxRepetition>
+int Wtf8BoundedNegatedAsciiExecRawImpl(
+    base::Vector<const uint8_t> bytes, uint32_t single_range_from,
+    uint32_t single_range_to, int min_repetition, int max_repetition,
+    int registers_per_match, size_t position, int max_matches,
+    int32_t* output) {
+  static_assert(kMaxRepetition == 0 || kMaxRepetition >= 2);
+  if constexpr (kMaxRepetition > 0) {
+    DCHECK_EQ(max_repetition, kMaxRepetition);
+  }
+  const int repetition_limit =
+      kMaxRepetition > 0 ? kMaxRepetition : max_repetition;
+  int matches = 0;
+  if (min_repetition == 0) {
+    while (matches < max_matches && position <= bytes.size()) {
+      size_t start = position;
+      size_t match_end = position;
+      int repeated = 0;
+      while (repeated < repetition_limit && match_end < bytes.size()) {
+        uint8_t byte = bytes[match_end];
+        if (V8_LIKELY(byte <= unibrow::Utf8::kMaxOneByteChar)) {
+          if (byte >= single_range_from && byte <= single_range_to) break;
+          match_end++;
+        } else {
+          DecodeNode8ClassCodePoint(bytes, &match_end);
+        }
+        repeated++;
+      }
+
+      int offset = matches * registers_per_match;
+      output[offset + RegExpCapture::StartRegister(0)] =
+          static_cast<int>(start);
+      output[offset + RegExpCapture::EndRegister(0)] =
+          static_cast<int>(match_end);
+      matches++;
+      if (match_end == start) {
+        if (match_end == bytes.size()) break;
+        position = match_end + 1;
+      } else {
+        position = match_end;
+      }
+    }
+    return matches;
+  }
+
+  int repeated = 0;
+  size_t run_start = position;
+  while (matches < max_matches && position < bytes.size()) {
+    size_t scalar_start = position;
+    uint8_t byte = bytes[position];
+    bool is_match;
+    if (V8_LIKELY(byte <= unibrow::Utf8::kMaxOneByteChar)) {
+      position++;
+      is_match = byte < single_range_from || byte > single_range_to;
+    } else {
+      DecodeNode8ClassCodePoint(bytes, &position);
+      is_match = true;
+    }
+    if (!is_match) {
+      if (repeated >= min_repetition) {
+        int offset = matches * registers_per_match;
+        output[offset + RegExpCapture::StartRegister(0)] =
+            static_cast<int>(run_start);
+        output[offset + RegExpCapture::EndRegister(0)] =
+            static_cast<int>(scalar_start);
+        matches++;
+        repeated = 0;
+        if (matches == max_matches) break;
+      }
+      repeated = 0;
+      continue;
+    }
+
+    if (repeated == 0) run_start = scalar_start;
+    repeated++;
+    if (repeated < repetition_limit) continue;
+
+    int offset = matches * registers_per_match;
+    output[offset + RegExpCapture::StartRegister(0)] =
+        static_cast<int>(run_start);
+    output[offset + RegExpCapture::EndRegister(0)] =
+        static_cast<int>(position);
+    matches++;
+    repeated = 0;
+  }
+  if (matches < max_matches && repeated >= min_repetition) {
+    int offset = matches * registers_per_match;
+    output[offset + RegExpCapture::StartRegister(0)] =
+        static_cast<int>(run_start);
+    output[offset + RegExpCapture::EndRegister(0)] =
+        static_cast<int>(position);
+    matches++;
+  }
+  return matches;
+}
+
 int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
                          Tagged<TrustedByteArray> ranges, bool is_negated,
                          bool is_run, bool can_be_zero_length,
@@ -1134,6 +1230,40 @@ int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
       repeated = 0;
     }
     return matches;
+  }
+  if (min_repetition >= 0 && is_negated && range_count == 1 &&
+      single_range_to <= unibrow::Utf8::kMaxOneByteChar && global &&
+      !sticky) {
+    switch (max_repetition) {
+      case 2:
+        return Wtf8BoundedNegatedAsciiExecRawImpl<2>(
+            bytes, single_range_from, single_range_to, min_repetition,
+            max_repetition, registers_per_match, position, max_matches, output);
+      case 3:
+        return Wtf8BoundedNegatedAsciiExecRawImpl<3>(
+            bytes, single_range_from, single_range_to, min_repetition,
+            max_repetition, registers_per_match, position, max_matches, output);
+      case 4:
+        return Wtf8BoundedNegatedAsciiExecRawImpl<4>(
+            bytes, single_range_from, single_range_to, min_repetition,
+            max_repetition, registers_per_match, position, max_matches, output);
+      case 5:
+        return Wtf8BoundedNegatedAsciiExecRawImpl<5>(
+            bytes, single_range_from, single_range_to, min_repetition,
+            max_repetition, registers_per_match, position, max_matches, output);
+      case 6:
+        return Wtf8BoundedNegatedAsciiExecRawImpl<6>(
+            bytes, single_range_from, single_range_to, min_repetition,
+            max_repetition, registers_per_match, position, max_matches, output);
+      case 7:
+        return Wtf8BoundedNegatedAsciiExecRawImpl<7>(
+            bytes, single_range_from, single_range_to, min_repetition,
+            max_repetition, registers_per_match, position, max_matches, output);
+      case 8:
+        return Wtf8BoundedNegatedAsciiExecRawImpl<8>(
+            bytes, single_range_from, single_range_to, min_repetition,
+            max_repetition, registers_per_match, position, max_matches, output);
+    }
   }
   if (min_repetition == 0 && is_negated && range_count == 1 &&
       single_range_to <= unibrow::Utf8::kMaxOneByteChar && global &&
