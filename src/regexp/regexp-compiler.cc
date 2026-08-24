@@ -2503,6 +2503,127 @@ EmitResult TextNode::Emit(RegExpCompiler* compiler, Trace* trace) {
   return on_success()->Emit(compiler, &successor_trace);
 }
 
+EmitResult Wtf8ScalarNode::Emit(RegExpCompiler* compiler, Trace* trace) {
+  TRACE_EMIT("Wtf8Scalar");
+  if (is_slow_node_ && !trace->is_trivial()) {
+    return trace->Flush(compiler, this);
+  }
+
+  LimitResult limit_result = LimitVersions(compiler, trace);
+  if (limit_result == DONE) return EmitResult::Success();
+  DCHECK_EQ(limit_result, CONTINUE);
+
+  RegExpMacroAssembler* assembler = compiler->macro_assembler();
+  if (!is_slow_node_) {
+    Label non_ascii;
+    assembler->LoadCurrentCharacter(trace->cp_offset(), trace->backtrack(),
+                                    true);
+    if (excluded_from_ == excluded_to_) {
+      assembler->CheckCharacter(excluded_from_, trace->backtrack());
+    } else {
+      assembler->CheckCharacterInRange(excluded_from_, excluded_to_,
+                                       trace->backtrack());
+    }
+    assembler->CheckCharacterGT(0x7f, &non_ascii);
+
+    Trace successor_trace(*trace);
+    RETURN_IF_ERROR(successor_trace.AdvanceCurrentPositionInTrace(1, compiler));
+    RecursionCheck rc(compiler);
+    RETURN_IF_ERROR(on_success()->Emit(compiler, &successor_trace));
+
+    assembler->Bind(&non_ascii);
+    return slow_node_->Emit(compiler, trace);
+  }
+
+  Label lead2, lead3, lead3_e0, lead4, lead4_f0, lead4_f4;
+  Label consume1, consume2, consume3, consume4, matched;
+
+  assembler->LoadCurrentCharacter(0, nullptr, true);
+  assembler->CheckCharacterLT(0xc2, &consume1);
+  assembler->CheckCharacterLT(0xe0, &lead2);
+  assembler->CheckCharacter(0xe0, &lead3_e0);
+  assembler->CheckCharacterLT(0xf0, &lead3);
+  assembler->CheckCharacter(0xf0, &lead4_f0);
+  assembler->CheckCharacterLT(0xf4, &lead4);
+  assembler->CheckCharacter(0xf4, &lead4_f4);
+  assembler->GoTo(&consume1);
+
+  assembler->Bind(&lead2);
+  assembler->LoadCurrentCharacter(1, &consume1, true);
+  assembler->CheckCharacterInRange(0x80, 0xbf, &consume2);
+  assembler->GoTo(&consume1);
+
+  assembler->Bind(&lead3_e0);
+  assembler->LoadCurrentCharacter(1, &consume1, true);
+  assembler->CheckCharacterInRange(0xa0, 0xbf, &lead3);
+  assembler->GoTo(&consume1);
+
+  assembler->Bind(&lead3);
+  // E1..EF arrive before loading byte 1. E0 arrives with byte 1 loaded.
+  Label lead3_second_valid;
+  assembler->CheckCharacterInRange(0x80, 0xbf, &lead3_second_valid);
+  assembler->LoadCurrentCharacter(1, &consume1, true);
+  assembler->CheckCharacterInRange(0x80, 0xbf, &lead3_second_valid);
+  assembler->GoTo(&consume1);
+  assembler->Bind(&lead3_second_valid);
+  assembler->LoadCurrentCharacter(2, &consume2, true);
+  assembler->CheckCharacterInRange(0x80, 0xbf, &consume3);
+  assembler->GoTo(&consume2);
+
+  assembler->Bind(&lead4_f0);
+  assembler->LoadCurrentCharacter(1, &consume1, true);
+  assembler->CheckCharacterInRange(0x90, 0xbf, &lead4);
+  assembler->GoTo(&consume1);
+
+  assembler->Bind(&lead4_f4);
+  assembler->LoadCurrentCharacter(1, &consume1, true);
+  assembler->CheckCharacterInRange(0x80, 0x8f, &lead4);
+  assembler->GoTo(&consume1);
+
+  assembler->Bind(&lead4);
+  // F1..F3 arrive before loading byte 1. F0/F4 arrive with byte 1 loaded.
+  Label lead4_second_valid;
+  assembler->CheckCharacterInRange(0x80, 0xbf, &lead4_second_valid);
+  assembler->LoadCurrentCharacter(1, &consume1, true);
+  assembler->CheckCharacterInRange(0x80, 0xbf, &lead4_second_valid);
+  assembler->GoTo(&consume1);
+  assembler->Bind(&lead4_second_valid);
+  assembler->LoadCurrentCharacter(2, &consume2, true);
+  Label lead4_third_valid;
+  assembler->CheckCharacterInRange(0x80, 0xbf, &lead4_third_valid);
+  assembler->GoTo(&consume2);
+  assembler->Bind(&lead4_third_valid);
+  assembler->LoadCurrentCharacter(3, &consume3, true);
+  assembler->CheckCharacterInRange(0x80, 0xbf, &consume4);
+  assembler->GoTo(&consume3);
+
+  assembler->Bind(&consume1);
+  assembler->AdvanceCurrentPosition(1);
+  assembler->GoTo(&matched);
+  assembler->Bind(&consume2);
+  assembler->AdvanceCurrentPosition(2);
+  assembler->GoTo(&matched);
+  assembler->Bind(&consume3);
+  assembler->AdvanceCurrentPosition(3);
+  assembler->GoTo(&matched);
+  assembler->Bind(&consume4);
+  assembler->AdvanceCurrentPosition(4);
+
+  assembler->Bind(&matched);
+  Trace successor_trace;
+  RecursionCheck rc(compiler);
+  return on_success()->Emit(compiler, &successor_trace);
+}
+
+void Wtf8ScalarNode::FillInBMInfo(Isolate*, int offset, int,
+                                  BoyerMooreLookahead* bm, bool not_at_start) {
+  // The node consumes at least one byte, but its successor has no fixed byte
+  // offset. Mark the remaining lookahead conservatively instead of teaching
+  // the unanchored-search optimizer a false fixed-width assumption.
+  if (offset < bm->length()) bm->SetRest(offset);
+  SaveBMInfo(bm, not_at_start, offset);
+}
+
 void Trace::InvalidateCurrentCharacter() { characters_preloaded_ = 0; }
 
 EmitResult Trace::AdvanceCurrentPositionInTrace(int by,
@@ -3633,6 +3754,7 @@ namespace {
 class AssertionPropagator : public AllStatic {
  public:
   static void VisitText(TextNode* that) {}
+  static void VisitWtf8Scalar(Wtf8ScalarNode* that) {}
 
   static void VisitAction(ActionNode* that) {
     // If the next node is interested in what it follows then this node
@@ -3684,6 +3806,12 @@ class EatsAtLeastPropagator : public AllStatic {
           that->on_success()->eats_at_least_info()->from_not_start);
       that->set_eats_at_least_info(EatsAtLeastInfo(eats_at_least));
     }
+  }
+
+  static void VisitWtf8Scalar(Wtf8ScalarNode* that) {
+    uint8_t eats_at_least = base::saturated_cast<uint8_t>(
+        1 + that->on_success()->eats_at_least_info()->from_not_start);
+    that->set_eats_at_least_info(EatsAtLeastInfo(eats_at_least));
   }
 
   static void VisitAction(ActionNode* that) {
@@ -3829,6 +3957,12 @@ class Analysis : public NodeVisitor {
     if (has_failed()) return;
     that->CalculateOffsets();
     STATIC_FOR_EACH(Propagators::VisitText(that));
+  }
+
+  void VisitWtf8Scalar(Wtf8ScalarNode* that) override {
+    EnsureAnalyzed(that->on_success());
+    if (has_failed()) return;
+    STATIC_FOR_EACH(Propagators::VisitWtf8Scalar(that));
   }
 
   void VisitAction(ActionNode* that) override {
@@ -4050,6 +4184,36 @@ RegExpNode* RegExpCompiler::PreprocessRegExp(RegExpCompileData* data,
 #endif
   TRACE_GRAPH_WITH_NODE("* Preprocess RegExp ", data->tree);
   REGISTER_NODE(accept());
+  if (v8_flags.utf8_string_semantics && is_one_byte && !IsIgnoreCase(flags()) &&
+      data->capture_count == 0) {
+    RegExpQuantifier* quantifier = nullptr;
+    if (data->tree->IsQuantifier()) {
+      quantifier = data->tree->AsQuantifier();
+    } else if (data->tree->IsAlternative()) {
+      for (RegExpTree* term : *data->tree->AsAlternative()->nodes()) {
+        if (!term->IsQuantifier()) continue;
+        if (quantifier != nullptr) {
+          quantifier = nullptr;
+          break;
+        }
+        quantifier = term->AsQuantifier();
+      }
+    }
+    if (quantifier != nullptr) {
+      const int optional_iterations = quantifier->max() - quantifier->min();
+      if (quantifier->is_greedy() && quantifier->min() < quantifier->max() &&
+          quantifier->min() <= 2 && quantifier->max() <= 5 &&
+          optional_iterations <= 3 && quantifier->body()->IsClassRanges()) {
+        RegExpClassRanges* class_ranges = quantifier->body()->AsClassRanges();
+        ZoneList<CharacterRange>* ranges = class_ranges->ranges(zone());
+        CharacterRange::Canonicalize(ranges);
+        if (class_ranges->is_negated() && ranges->length() == 1 &&
+            ranges->first().to() <= 0x7f) {
+          set_node8_wtf8_bounded_class(class_ranges);
+        }
+      }
+    }
+  }
   // Wrap the body of the regexp in capture #0.
   RegExpNode* captured_body =
       RegExpCapture::ToNode(data->tree, 0, this, accept());

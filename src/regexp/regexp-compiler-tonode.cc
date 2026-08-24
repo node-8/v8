@@ -555,6 +555,16 @@ RegExpNode* RegExpClassRanges::ToNodeImpl(RegExpCompiler* compiler,
   Zone* const zone = compiler->zone();
   ZoneList<CharacterRange>* ranges = this->ranges(zone);
 
+  if (compiler->IsNode8Wtf8BoundedClass(this)) {
+    DCHECK(is_negated());
+    DCHECK_EQ(ranges->length(), 1);
+    DCHECK_LE(ranges->first().to(), 0x7f);
+    Wtf8ScalarNode* result = zone->New<Wtf8ScalarNode>(
+        ranges->first().from(), ranges->first().to(), on_success);
+    REGISTER_NODE(result);
+    return result;
+  }
+
   const bool needs_case_folding =
       NeedsUnicodeCaseEquivalents(compiler->flags()) &&
       !no_case_folding_needed();

@@ -177,6 +177,15 @@ void DotPrinterImpl::VisitText(TextNode* that) {
   Visit(that->on_success());
 }
 
+void DotPrinterImpl::VisitWtf8Scalar(Wtf8ScalarNode* that) {
+  os_ << "  n" << that << " [label=\"WTF-8 scalar except "
+      << AsUC32(that->excluded_from()) << "-" << AsUC32(that->excluded_to())
+      << "\", shape=box, peripheries=2];\n";
+  PrintAttributes(that);
+  os_ << "  n" << that << " -> n" << that->on_success() << ";\n";
+  Visit(that->on_success());
+}
+
 void DotPrinterImpl::VisitBackReference(BackReferenceNode* that) {
   os_ << "  n" << that << " [label=\"$" << that->start_register() << "..$"
       << that->end_register() << "\", shape=doubleoctagon];\n";

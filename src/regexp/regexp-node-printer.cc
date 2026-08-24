@@ -229,6 +229,12 @@ void RegExpNodePrinter<RegExpNode>::VisitText(TextNode* node) {
   PrintSuccess(node);
 }
 
+void RegExpNodePrinter<RegExpNode>::VisitWtf8Scalar(Wtf8ScalarNode* node) {
+  PrintNodeLabel(node, "Wtf8Scalar");
+  os() << "exclude " << node->excluded_from() << "-" << node->excluded_to();
+  PrintSuccess(node);
+}
+
 }  // namespace internal
 }  // namespace v8
 

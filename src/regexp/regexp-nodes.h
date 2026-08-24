@@ -33,6 +33,7 @@ struct PreloadState;
   VISIT(NegativeLookaroundChoice) \
   VISIT(BackReference)            \
   VISIT(Assertion)                \
+  VISIT(Wtf8Scalar)               \
   VISIT(Text)
 
 #define FORWARD_DECLARE(type) class type##Node;
@@ -505,6 +506,48 @@ class TextNode : public SeqRegExpNode {
                     int* checked_up_to);
   ZoneList<TextElement>* elms_;
   bool read_backward_;
+};
+
+// Consumes one WTF-8 scalar or malformed maximal-subpart. This initial node
+// only needs an ASCII exclusion range: every non-ASCII result matches.
+class Wtf8ScalarNode : public SeqRegExpNode {
+ public:
+  Wtf8ScalarNode(base::uc32 excluded_from, base::uc32 excluded_to,
+                 RegExpNode* on_success)
+      : SeqRegExpNode(on_success),
+        excluded_from_(excluded_from),
+        excluded_to_(excluded_to),
+        slow_node_(on_success->zone()->New<Wtf8ScalarNode>(
+            excluded_from, excluded_to, on_success, true)) {
+    DCHECK_LE(excluded_from_, excluded_to_);
+    DCHECK_LE(excluded_to_, 0x7f);
+  }
+  Wtf8ScalarNode* AsWtf8ScalarNode() override { return this; }
+  void Accept(NodeVisitor* visitor) override;
+  V8_WARN_UNUSED_RESULT EmitResult Emit(RegExpCompiler* compiler,
+                                        Trace* trace) override;
+  void GetQuickCheckDetails(QuickCheckDetails*, RegExpCompiler*, int, bool,
+                            int) override {}
+  void FillInBMInfo(Isolate*, int offset, int, BoyerMooreLookahead* bm,
+                    bool not_at_start) override;
+  base::uc32 excluded_from() const { return excluded_from_; }
+  base::uc32 excluded_to() const { return excluded_to_; }
+
+ private:
+  Wtf8ScalarNode(base::uc32 excluded_from, base::uc32 excluded_to,
+                 RegExpNode* on_success, bool is_slow_node)
+      : SeqRegExpNode(on_success),
+        excluded_from_(excluded_from),
+        excluded_to_(excluded_to),
+        slow_node_(nullptr),
+        is_slow_node_(is_slow_node) {}
+
+  base::uc32 excluded_from_;
+  base::uc32 excluded_to_;
+  Wtf8ScalarNode* slow_node_;
+  bool is_slow_node_ = false;
+
+  friend Zone;
 };
 
 class AssertionNode : public SeqRegExpNode {

@@ -603,6 +603,12 @@ class RegExpCompiler {
   bool IsRegExpTooBig() const { return reg_exp_too_big_; }
 
   inline bool one_byte() { return one_byte_; }
+  void set_node8_wtf8_bounded_class(RegExpClassRanges* value) {
+    node8_wtf8_bounded_class_ = value;
+  }
+  bool IsNode8Wtf8BoundedClass(const RegExpClassRanges* value) const {
+    return value == node8_wtf8_bounded_class_;
+  }
   inline bool optimize() { return optimize_; }
   inline void set_optimize(bool value) { optimize_ = value; }
   inline bool limiting_recursion() { return limiting_recursion_; }
@@ -656,6 +662,7 @@ class RegExpCompiler {
   bool read_backward_;
   int current_expansion_factor_;
   FrequencyCollator frequency_collator_;
+  RegExpClassRanges* node8_wtf8_bounded_class_ = nullptr;
 #ifdef V8_ENABLE_REGEXP_DIAGNOSTICS
   std::unique_ptr<RegExpDiagnostics> diagnostics_;
 #endif

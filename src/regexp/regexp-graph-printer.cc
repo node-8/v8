@@ -173,6 +173,10 @@ void RegExpGraphPrinter::Scheduler::VisitText(TextNode* node) {
   VisitSeqRegExpNode(node->AsSeqRegExpNode());
 }
 
+void RegExpGraphPrinter::Scheduler::VisitWtf8Scalar(Wtf8ScalarNode* node) {
+  VisitSeqRegExpNode(node->AsSeqRegExpNode());
+}
+
 namespace {
 
 // TODO(pthier): Some of the helpers are equal or at least very similar to
