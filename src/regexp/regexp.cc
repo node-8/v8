@@ -671,12 +671,14 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
           node8_class_tree = quantifier->body();
         }
       } else if (parse_result.capture_count > 0 &&
-                 quantifier->is_non_greedy() && quantifier->min() == 2 &&
-                 quantifier->max() == 2) {
+                 (quantifier->is_greedy() ||
+                  quantifier->is_non_greedy()) &&
+                 quantifier->min() >= 2 &&
+                 quantifier->min() == quantifier->max()) {
         node8_class_tree = GetCaptureWrappedClass(
             quantifier->body(), parse_result.capture_count);
         if (node8_class_tree != nullptr) {
-          node8_class_exact_repetition = 2;
+          node8_class_exact_repetition = quantifier->min();
         }
       }
     }
