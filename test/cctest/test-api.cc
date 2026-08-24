@@ -679,8 +679,11 @@ TEST(Node8ExternalTwoByteEncodesWtf8) {
   CHECK_EQ(1, source_dispose_count);
 }
 
-TEST(Node8Utf8SemanticsApiMatchesFlag) {
-  CHECK_EQ(i::v8_flags.utf8_string_semantics, String::IsUtf8SemanticsEnabled());
+TEST(Node8Utf8SemanticsValueViewMatchesFlag) {
+  LocalContext env;
+  v8::HandleScope scope(env.isolate());
+  String::ValueView view(env.isolate(), v8_str("x"));
+  CHECK_EQ(i::v8_flags.utf8_string_semantics, view.uses_utf8_semantics());
 }
 
 TEST(Node8Latin1ApiEncodesUtf8) {

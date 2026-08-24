@@ -7546,10 +7546,6 @@ MaybeLocal<String> String::NewFromBytes(Isolate* v8_isolate,
   return result;
 }
 
-bool String::IsUtf8SemanticsEnabled() {
-  return i::v8_flags.utf8_string_semantics;
-}
-
 MaybeLocal<String> String::NewFromOneByte(Isolate* v8_isolate,
                                           const uint8_t* data,
                                           NewStringType type, int length) {
@@ -11364,6 +11360,7 @@ String::ValueView::ValueView(v8::Isolate* v8_isolate,
                              v8::Local<v8::String> str) {
   i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(v8_isolate);
   i::DirectHandle<i::String> i_str = Utils::OpenDirectHandle(*str);
+  uses_utf8_semantics_ = i::v8_flags.utf8_string_semantics;
 
   // If the underlying string is flat, we can access its content directly.
   // Otherwise, we need to create a handle scope to flatten the string.
