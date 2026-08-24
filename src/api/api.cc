@@ -7546,6 +7546,10 @@ MaybeLocal<String> String::NewFromBytes(Isolate* v8_isolate,
   return result;
 }
 
+bool String::IsUtf8SemanticsEnabled() {
+  return i::v8_flags.utf8_string_semantics;
+}
+
 MaybeLocal<String> String::NewFromOneByte(Isolate* v8_isolate,
                                           const uint8_t* data,
                                           NewStringType type, int length) {

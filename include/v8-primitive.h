@@ -490,6 +490,9 @@ class V8_EXPORT String : public Name {
       Isolate* isolate, const uint8_t* data,
       NewStringType type = NewStringType::kNormal, int length = -1);
 
+  /** Returns whether this V8 process uses node-8 UTF-8 String semantics. **/
+  static bool IsUtf8SemanticsEnabled();
+
   /** Allocates a new string from Latin-1 data.  Only returns an empty value
    * when length > kMaxLength. **/
   static V8_WARN_UNUSED_RESULT MaybeLocal<String> NewFromOneByte(

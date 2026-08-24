@@ -679,6 +679,10 @@ TEST(Node8ExternalTwoByteEncodesWtf8) {
   CHECK_EQ(1, source_dispose_count);
 }
 
+TEST(Node8Utf8SemanticsApiMatchesFlag) {
+  CHECK_EQ(i::v8_flags.utf8_string_semantics, String::IsUtf8SemanticsEnabled());
+}
+
 TEST(Node8Latin1ApiEncodesUtf8) {
   if (!i::v8_flags.utf8_string_semantics) return;
   int external_dispose_count = 0;
