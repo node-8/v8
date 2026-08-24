@@ -1169,8 +1169,15 @@ DirectHandle<FixedArray> RegExp::CreateCaptureNameMap(
                                                 capture->name()->size());
     // CSA code in ConstructNewResultFromMatchInfo requires these strings to be
     // internalized so they can be used as property names in the 'exec' results.
-    DirectHandle<String> name =
-        isolate->factory()->InternalizeString(capture_name);
+    DirectHandle<String> name;
+    if (v8_flags.utf8_string_semantics) {
+      DirectHandle<String> encoded_name = isolate->factory()
+                                              ->NewStringFromTwoByte(capture_name)
+                                              .ToHandleChecked();
+      name = isolate->factory()->InternalizeString(encoded_name);
+    } else {
+      name = isolate->factory()->InternalizeString(capture_name);
+    }
     array->set(i * 2, *name);
     array->set(i * 2 + 1, Smi::FromInt(capture->index()));
 

@@ -86,6 +86,11 @@ checkCaptures(/([^é])/u, eAcute + cjk, 2, cjk, [cjk]);
 checkCaptures(/(([é-ë]))/u, cjk + eAcute, 3, eAcute, [eAcute, eAcute]);
 const namedCapture = /(?<value>[\uFFFD])/u.exec(raw(0x80));
 assertEquals(byteValues(raw(0x80)), byteValues(namedCapture.groups.value));
+const unicodeNamedCapture = /(?<名字>[^a])/u.exec(cjk);
+assertSame(cjk, unicodeNamedCapture.groups.名字);
+assertEquals(['名字'], Object.keys(unicodeNamedCapture.groups));
+const fallbackUnicodeNamedCapture = /(?<名字>[a])b/u.exec('ab');
+assertSame('a', fallbackUnicodeNamedCapture.groups.名字);
 
 const indexedCaptures = /(([^é]))/du.exec(eAcute + cjk);
 assertEquals([[2, 5], [2, 5], [2, 5]], indexedCaptures.indices);
