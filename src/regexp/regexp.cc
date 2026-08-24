@@ -1135,6 +1135,94 @@ int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
     }
     return matches;
   }
+  if (min_repetition == 0 && is_negated && range_count == 1 &&
+      single_range_to <= unibrow::Utf8::kMaxOneByteChar && global &&
+      !sticky) {
+    DCHECK_EQ(capture_count, 0);
+    while (matches < max_matches && position <= bytes.size()) {
+      size_t start = position;
+      size_t match_end = position;
+      int repeated = 0;
+      while (repeated < max_repetition && match_end < bytes.size()) {
+        uint8_t byte = bytes[match_end];
+        if (V8_LIKELY(byte <= unibrow::Utf8::kMaxOneByteChar)) {
+          if (byte >= single_range_from && byte <= single_range_to) break;
+          match_end++;
+        } else {
+          DecodeNode8ClassCodePoint(bytes, &match_end);
+        }
+        repeated++;
+      }
+
+      int offset = matches * registers_per_match;
+      output[offset + RegExpCapture::StartRegister(0)] =
+          static_cast<int>(start);
+      output[offset + RegExpCapture::EndRegister(0)] =
+          static_cast<int>(match_end);
+      matches++;
+      if (match_end == start) {
+        if (match_end == bytes.size()) break;
+        position = match_end + 1;
+      } else {
+        position = match_end;
+      }
+    }
+    return matches;
+  }
+  if (min_repetition > 0 && is_negated && range_count == 1 &&
+      single_range_to <= unibrow::Utf8::kMaxOneByteChar && global &&
+      !sticky) {
+    DCHECK_EQ(capture_count, 0);
+    int repeated = 0;
+    size_t run_start = position;
+    while (matches < max_matches && position < bytes.size()) {
+      size_t scalar_start = position;
+      uint8_t byte = bytes[position];
+      bool is_match;
+      if (V8_LIKELY(byte <= unibrow::Utf8::kMaxOneByteChar)) {
+        position++;
+        is_match = byte < single_range_from || byte > single_range_to;
+      } else {
+        DecodeNode8ClassCodePoint(bytes, &position);
+        is_match = true;
+      }
+      if (!is_match) {
+        if (repeated >= min_repetition) {
+          int offset = matches * registers_per_match;
+          output[offset + RegExpCapture::StartRegister(0)] =
+              static_cast<int>(run_start);
+          output[offset + RegExpCapture::EndRegister(0)] =
+              static_cast<int>(scalar_start);
+          matches++;
+          repeated = 0;
+          if (matches == max_matches) break;
+        }
+        repeated = 0;
+        continue;
+      }
+
+      if (repeated == 0) run_start = scalar_start;
+      repeated++;
+      if (repeated < max_repetition) continue;
+
+      int offset = matches * registers_per_match;
+      output[offset + RegExpCapture::StartRegister(0)] =
+          static_cast<int>(run_start);
+      output[offset + RegExpCapture::EndRegister(0)] =
+          static_cast<int>(position);
+      matches++;
+      repeated = 0;
+    }
+    if (matches < max_matches && repeated >= min_repetition) {
+      int offset = matches * registers_per_match;
+      output[offset + RegExpCapture::StartRegister(0)] =
+          static_cast<int>(run_start);
+      output[offset + RegExpCapture::EndRegister(0)] =
+          static_cast<int>(position);
+      matches++;
+    }
+    return matches;
+  }
   if (min_repetition == 0) {
     DCHECK_EQ(capture_count, 0);
     while (matches < max_matches && position <= bytes.size()) {
