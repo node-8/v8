@@ -1049,6 +1049,40 @@ int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
   const uint32_t single_range_to =
       range_count == 1 ? ranges->get_int(sizeof(uint32_t)) : 0;
   size_t position = index;
+  if (can_be_zero_length && !is_run && range_count == 1) {
+    DCHECK_EQ(capture_count, 0);
+    while (matches < max_matches && position <= bytes.size()) {
+      int start = static_cast<int>(position);
+      size_t match_end = position;
+      if (position < bytes.size()) {
+        size_t next_position = position;
+        unibrow::uchar code_point;
+        if (V8_LIKELY(bytes[position] <= unibrow::Utf8::kMaxOneByteChar)) {
+          code_point = bytes[position];
+          next_position++;
+        } else {
+          code_point = DecodeNode8ClassCodePoint(bytes, &next_position);
+        }
+        const bool in_range = code_point >= single_range_from &&
+                              code_point <= single_range_to;
+        if (in_range != is_negated) match_end = next_position;
+      }
+
+      int offset = matches * registers_per_match;
+      output[offset + RegExpCapture::StartRegister(0)] = start;
+      output[offset + RegExpCapture::EndRegister(0)] =
+          static_cast<int>(match_end);
+      matches++;
+      if (!global) break;
+      if (match_end == static_cast<size_t>(start)) {
+        if (match_end == bytes.size()) break;
+        position = match_end + 1;
+      } else {
+        position = match_end;
+      }
+    }
+    return matches;
+  }
   if (can_be_zero_length) {
     DCHECK_EQ(capture_count, 0);
     while (matches < max_matches && position <= bytes.size()) {
