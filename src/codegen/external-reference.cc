@@ -1142,6 +1142,8 @@ FUNCTION_REFERENCE(re_atom_exec_raw, RegExp::AtomExecRaw)
 
 FUNCTION_REFERENCE(re_wtf8_dot_exec_raw, RegExp::Wtf8DotExecRaw)
 
+FUNCTION_REFERENCE(re_wtf8_class_exec_raw, RegExp::Wtf8ClassExecRaw)
+
 FUNCTION_REFERENCE(allocate_regexp_result_vector, RegExpResultVector::Allocate)
 FUNCTION_REFERENCE(free_regexp_result_vector, RegExpResultVector::Free)
 

@@ -121,6 +121,8 @@ PROTECTED_POINTER_ACCESSORS(IrRegExpData, latin1_bytecode, TrustedByteArray,
                             kLatin1BytecodeOffset)
 PROTECTED_POINTER_ACCESSORS(IrRegExpData, uc16_bytecode, TrustedByteArray,
                             kUc16BytecodeOffset)
+PROTECTED_POINTER_ACCESSORS(IrRegExpData, node8_class_ranges, TrustedByteArray,
+                            kNode8ClassRangesOffset)
 bool IrRegExpData::has_bytecode(bool is_one_byte) const {
   return is_one_byte ? has_latin1_bytecode() : has_uc16_bytecode();
 }
@@ -163,6 +165,10 @@ BIT_FIELD_ACCESSORS(IrRegExpData, bit_field, is_linear_executable,
                     IrRegExpData::Bits::IsLinearExecutableBit)
 BIT_FIELD_ACCESSORS(IrRegExpData, bit_field, is_wtf8_dot,
                     IrRegExpData::Bits::IsWtf8DotBit)
+BIT_FIELD_ACCESSORS(IrRegExpData, bit_field, is_wtf8_class,
+                    IrRegExpData::Bits::IsWtf8ClassBit)
+BIT_FIELD_ACCESSORS(IrRegExpData, bit_field, is_wtf8_class_negated,
+                    IrRegExpData::Bits::IsWtf8ClassNegatedBit)
 
 }  // namespace internal
 }  // namespace v8

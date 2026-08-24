@@ -468,6 +468,42 @@ RegExpTree* GetPositiveClassByteTree(RegExpTree* tree, RegExpFlags flags,
   return zone->New<RegExpDisjunction>(alternatives);
 }
 
+ZoneList<CharacterRange>* GetNode8DecoderClassRanges(RegExpTree* tree,
+                                                     RegExpFlags flags,
+                                                     Zone* zone,
+                                                     bool* is_negated) {
+  if (!tree->IsClassRanges()) return nullptr;
+  RegExpClassRanges* character_class = tree->AsClassRanges();
+  ZoneList<CharacterRange>* ranges = character_class->ranges(zone);
+  CharacterRange::Canonicalize(ranges);
+  if (!IsEitherUnicode(flags)) {
+    for (CharacterRange range : *ranges) {
+      if (range.from() <= 0xdfff && range.to() >= 0xd800) return nullptr;
+    }
+  }
+
+  *is_negated = character_class->is_negated();
+  if (*is_negated) return ranges;
+  for (CharacterRange range : *ranges) {
+    if (range.Contains(unibrow::Utf8::kBadChar)) return ranges;
+  }
+  return nullptr;
+}
+
+DirectHandle<TrustedByteArray> NewNode8ClassRangeTable(
+    Isolate* isolate, ZoneList<CharacterRange>* ranges) {
+  static constexpr int kBytesPerRange = 2 * sizeof(uint32_t);
+  CHECK_LE(ranges->length(), TrustedByteArray::kMaxLength / kBytesPerRange);
+  DirectHandle<TrustedByteArray> table =
+      isolate->factory()->NewTrustedByteArray(ranges->length() *
+                                              kBytesPerRange);
+  for (int i = 0; i < ranges->length(); ++i) {
+    table->set_int(i * kBytesPerRange, ranges->at(i).from());
+    table->set_int(i * kBytesPerRange + sizeof(uint32_t), ranges->at(i).to());
+  }
+  return table;
+}
+
 }  // namespace
 
 // Generic RegExp methods. Dispatches to implementation specific methods.
@@ -570,7 +606,9 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
              parse_result.tree->IsClassRanges()) {
     std::optional<base::uc32> code_point =
         GetSingletonClassCodePoint(parse_result.tree, &zone);
-    if (code_point.has_value() && !ContainsMalformedNode8Bytes(pattern)) {
+    if (code_point.has_value() &&
+        code_point.value() != unibrow::Utf8::kBadChar &&
+        !ContainsMalformedNode8Bytes(pattern)) {
       DirectHandle<String> atom_string;
       ASSIGN_RETURN_ON_EXCEPTION(
           isolate, atom_string,
@@ -583,14 +621,37 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
     const bool can_be_zero_length = parse_result.tree->min_match() == 0;
     const bool is_wtf8_dot = v8_flags.utf8_string_semantics &&
                              pattern->length() == 1 && pattern->Get(0) == '.';
+    ZoneList<CharacterRange>* node8_class_ranges = nullptr;
+    bool is_wtf8_class_negated = false;
+    if (v8_flags.utf8_string_semantics && !is_wtf8_dot &&
+        !IsIgnoreCase(flags) &&
+        parse_result.capture_count == 0 && parse_result.tree->IsClassRanges()) {
+      node8_class_ranges = GetNode8DecoderClassRanges(
+          parse_result.tree, flags, &zone, &is_wtf8_class_negated);
+      if (node8_class_ranges != nullptr &&
+          ContainsMalformedNode8Bytes(pattern)) {
+        node8_class_ranges = nullptr;
+        is_wtf8_class_negated = false;
+      }
+    }
+    const bool is_wtf8_class = node8_class_ranges != nullptr;
     using Bits = IrRegExpData::Bits;
     const uint32_t bit_field =
         Bits::CanBeZeroLengthBit::encode(can_be_zero_length) |
         Bits::IsLinearExecutableBit::encode(is_linear_executable) |
-        Bits::IsWtf8DotBit::encode(is_wtf8_dot);
+        Bits::IsWtf8DotBit::encode(is_wtf8_dot) |
+        Bits::IsWtf8ClassBit::encode(is_wtf8_class) |
+        Bits::IsWtf8ClassNegatedBit::encode(is_wtf8_class_negated);
     RegExpImpl::IrregexpInitialize(isolate, re, pattern, flags,
                                    parse_result.capture_count, backtrack_limit,
                                    bit_field);
+    if (is_wtf8_class) {
+      DirectHandle<IrRegExpData> re_data =
+          direct_handle(SbxCast<IrRegExpData>(re->data(isolate)), isolate);
+      DirectHandle<TrustedByteArray> table =
+          NewNode8ClassRangeTable(isolate, node8_class_ranges);
+      re_data->set_node8_class_ranges(*table);
+    }
   }
   // Compilation succeeded so the data is set on the regexp
   // and we can store it in the cache.
@@ -868,6 +929,63 @@ int Wtf8DotExecRawImpl(const String::FlatContent& subject, int index,
   return matches;
 }
 
+bool Node8ClassContains(Tagged<TrustedByteArray> ranges,
+                        unibrow::uchar code_point) {
+  static constexpr int kBytesPerRange = 2 * sizeof(uint32_t);
+  CHECK_EQ(ranges->length() % kBytesPerRange, 0);
+  int low = 0;
+  int high = ranges->length() / kBytesPerRange;
+  while (low < high) {
+    int middle = low + (high - low) / 2;
+    int offset = middle * kBytesPerRange;
+    uint32_t from = ranges->get_int(offset);
+    uint32_t to = ranges->get_int(offset + sizeof(uint32_t));
+    if (code_point < from) {
+      high = middle;
+    } else if (code_point > to) {
+      low = middle + 1;
+    } else {
+      return true;
+    }
+  }
+  return false;
+}
+
+int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
+                         Tagged<TrustedByteArray> ranges, bool is_negated,
+                         int index, RegExpFlags flags, int32_t* output,
+                         int output_size) {
+  DCHECK(subject.IsOneByte());
+  DCHECK_GE(index, 0);
+  DCHECK_LE(index, subject.length());
+  CHECK_EQ(output_size % JSRegExp::kAtomRegisterCount, 0);
+
+  const bool global = IsGlobal(flags);
+  const bool sticky = IsSticky(flags);
+  const int max_matches =
+      global ? output_size / JSRegExp::kAtomRegisterCount : 1;
+  int matches = 0;
+  Wtf8ByteCursor cursor(subject.ToByteVector(),
+                        Wtf8ByteCursor::Policy::kInternalWtf8, index);
+  while (matches < max_matches && cursor.has_next()) {
+    int start = static_cast<int>(cursor.position());
+    Wtf8ByteCursor::Result result = cursor.DecodeNext();
+    bool is_match = Node8ClassContains(ranges, result.code_point);
+    if (is_negated) is_match = !is_match;
+    if (!is_match) {
+      if (sticky) break;
+      continue;
+    }
+
+    int offset = matches * JSRegExp::kAtomRegisterCount;
+    output[offset] = start;
+    output[offset + 1] = static_cast<int>(cursor.position());
+    matches++;
+    if (!global) break;
+  }
+  return matches;
+}
+
 }  // namespace
 
 // static
@@ -884,6 +1002,25 @@ intptr_t RegExp::Wtf8DotExecRaw(Isolate* isolate,
   return Wtf8DotExecRawImpl(
       subject_content, index, JSRegExp::AsRegExpFlags(data->flags()),
       result_offsets_vector, result_offsets_vector_length);
+}
+
+// static
+intptr_t RegExp::Wtf8ClassExecRaw(Isolate* isolate,
+                                  Address /* IrRegExpData */ data_address,
+                                  Address /* String */ subject_address,
+                                  int32_t index, int32_t* result_offsets_vector,
+                                  int32_t result_offsets_vector_length) {
+  DisallowGarbageCollection no_gc;
+  auto data = SbxCast<IrRegExpData>(Tagged<Object>(data_address));
+  auto subject = Cast<String>(Tagged<Object>(subject_address));
+  DCHECK(data->is_wtf8_class());
+  DCHECK(data->has_node8_class_ranges());
+  String::FlatContent subject_content = subject->GetFlatContent(no_gc);
+  return Wtf8ClassExecRawImpl(subject_content, data->node8_class_ranges(),
+                              data->is_wtf8_class_negated(), index,
+                              JSRegExp::AsRegExpFlags(data->flags()),
+                              result_offsets_vector,
+                              result_offsets_vector_length);
 }
 
 // Irregexp implementation.
@@ -1292,6 +1429,9 @@ int RegExpImpl::IrregexpPrepare(Isolate* isolate,
 
   // Check representation of the underlying storage.
   bool is_one_byte = String::IsOneByteRepresentationUnderneath(*subject);
+  if (is_one_byte && (re_data->is_wtf8_dot() || re_data->is_wtf8_class())) {
+    return JSRegExp::RegistersForCaptureCount(re_data->capture_count());
+  }
   if (!RegExpImpl::EnsureCompiledIrregexp(isolate, re_data, subject,
                                           is_one_byte)) {
     return -1;
@@ -1313,6 +1453,17 @@ int RegExpImpl::IrregexpExecRaw(Isolate* isolate,
             JSRegExp::RegistersForCaptureCount(regexp_data->capture_count()));
 
   bool is_one_byte = String::IsOneByteRepresentationUnderneath(*subject);
+
+  if (is_one_byte && regexp_data->is_wtf8_dot()) {
+    return static_cast<int>(RegExp::Wtf8DotExecRaw(isolate, regexp_data->ptr(),
+                                                   subject->ptr(), index,
+                                                   output, output_size));
+  }
+  if (is_one_byte && regexp_data->is_wtf8_class()) {
+    return static_cast<int>(
+        RegExp::Wtf8ClassExecRaw(isolate, regexp_data->ptr(), subject->ptr(),
+                                 index, output, output_size));
+  }
 
   if (!regexp_data->ShouldProduceBytecode()) {
     do {
@@ -1388,6 +1539,15 @@ std::optional<int> RegExpImpl::IrregexpExec(
     CHECK_LE(result_offsets_vector_length,
              static_cast<uint32_t>(std::numeric_limits<int32_t>::max()));
     return static_cast<int>(RegExp::Wtf8DotExecRaw(
+        isolate, regexp_data->ptr(), subject->ptr(), previous_index,
+        result_offsets_vector,
+        static_cast<int32_t>(result_offsets_vector_length)));
+  }
+  if (regexp_data->is_wtf8_class() &&
+      String::IsOneByteRepresentationUnderneath(*subject)) {
+    CHECK_LE(result_offsets_vector_length,
+             static_cast<uint32_t>(std::numeric_limits<int32_t>::max()));
+    return static_cast<int>(RegExp::Wtf8ClassExecRaw(
         isolate, regexp_data->ptr(), subject->ptr(), previous_index,
         result_offsets_vector,
         static_cast<int32_t>(result_offsets_vector_length)));

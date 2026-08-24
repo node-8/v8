@@ -251,6 +251,7 @@ class IrRegExpData : public RegExpData {
   inline Tagged<Code> code(IsolateForSandbox isolate, bool is_one_byte) const;
   DECL_PROTECTED_POINTER_ACCESSORS(latin1_bytecode, TrustedByteArray)
   DECL_PROTECTED_POINTER_ACCESSORS(uc16_bytecode, TrustedByteArray)
+  DECL_PROTECTED_POINTER_ACCESSORS(node8_class_ranges, TrustedByteArray)
   inline bool has_bytecode(bool is_one_byte) const;
   inline void clear_bytecode(bool is_one_byte);
   inline void set_bytecode(bool is_one_byte, Tagged<TrustedByteArray> bytecode);
@@ -267,6 +268,8 @@ class IrRegExpData : public RegExpData {
   DECL_BOOLEAN_ACCESSORS(can_be_zero_length)
   DECL_BOOLEAN_ACCESSORS(is_linear_executable)
   DECL_BOOLEAN_ACCESSORS(is_wtf8_dot)
+  DECL_BOOLEAN_ACCESSORS(is_wtf8_class)
+  DECL_BOOLEAN_ACCESSORS(is_wtf8_class_negated)
 
   struct Bits {
     DEFINE_TORQUE_GENERATED_IR_REG_EXP_DATA_BIT_FIELD()
@@ -292,6 +295,7 @@ class IrRegExpData : public RegExpData {
 #define FIELD_LIST(V)                             \
   V(kLatin1BytecodeOffset, kProtectedPointerSize) \
   V(kUc16BytecodeOffset, kProtectedPointerSize)   \
+  V(kNode8ClassRangesOffset, kProtectedPointerSize) \
   V(kLatin1CodeOffset, kCodePointerSize)          \
   V(kUc16CodeOffset, kCodePointerSize)            \
   V(kCaptureNameMapOffset, kTaggedSize)           \

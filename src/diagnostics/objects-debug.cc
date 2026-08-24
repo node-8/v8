@@ -2297,6 +2297,7 @@ void IrRegExpData::IrRegExpDataVerify(Isolate* isolate) {
 
   VerifyProtectedPointerField(isolate, kLatin1BytecodeOffset);
   VerifyProtectedPointerField(isolate, kUc16BytecodeOffset);
+  VerifyProtectedPointerField(isolate, kNode8ClassRangesOffset);
 
   CHECK_IMPLIES(!has_latin1_code(), !has_latin1_bytecode());
   CHECK_IMPLIES(!has_uc16_code(), !has_uc16_bytecode());
@@ -2305,6 +2306,12 @@ void IrRegExpData::IrRegExpDataVerify(Isolate* isolate) {
   CHECK_IMPLIES(has_uc16_code(), Is<Code>(uc16_code(isolate)));
   CHECK_IMPLIES(has_latin1_bytecode(), Is<TrustedByteArray>(latin1_bytecode()));
   CHECK_IMPLIES(has_uc16_bytecode(), Is<TrustedByteArray>(uc16_bytecode()));
+  CHECK_IMPLIES(is_wtf8_class(), has_node8_class_ranges());
+  CHECK_IMPLIES(!is_wtf8_class(), !has_node8_class_ranges());
+  CHECK_IMPLIES(is_wtf8_class_negated(), is_wtf8_class());
+  if (has_node8_class_ranges()) {
+    CHECK_EQ(node8_class_ranges()->length() % (2 * sizeof(uint32_t)), 0);
+  }
 
   CHECK_IMPLIES(
       IsSmi(capture_name_map()),

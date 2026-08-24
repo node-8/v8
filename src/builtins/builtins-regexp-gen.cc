@@ -688,12 +688,22 @@ TNode<UintPtrT> RegExpBuiltinsAssembler::RegExpExecInternal(
 
   BIND(&irregexp);
   {
-    TNode<Uint32T> bit_field = Unsigned(SmiToInt32(
-        LoadObjectField<Smi>(data, IrRegExpData::kBitFieldOffset)));
+    Label check_wtf8_class(this);
+    TNode<Uint32T> bit_field =
+        LoadObjectField<Uint32T>(data, IrRegExpData::kBitFieldOffset);
     GotoIfNot(IsSetWord32<IrRegExpData::Bits::IsWtf8DotBit>(bit_field),
-              &regexp_engine);
+              &check_wtf8_class);
     GotoIfNot(to_direct.IsOneByte(), &regexp_engine);
     var_result = RegExpExecWtf8Dot(
+        CAST(data), string, CAST(last_index), result_offsets_vector,
+        result_offsets_vector_length);
+    Goto(&out);
+
+    BIND(&check_wtf8_class);
+    GotoIfNot(IsSetWord32<IrRegExpData::Bits::IsWtf8ClassBit>(bit_field),
+              &regexp_engine);
+    GotoIfNot(to_direct.IsOneByte(), &regexp_engine);
+    var_result = RegExpExecWtf8Class(
         CAST(data), string, CAST(last_index), result_offsets_vector,
         result_offsets_vector_length);
     Goto(&out);
@@ -1101,6 +1111,23 @@ TNode<UintPtrT> RegExpBuiltinsAssembler::RegExpExecWtf8Dot(
     TNode<Smi> last_index, TNode<RawPtrT> result_offsets_vector,
     TNode<Int32T> result_offsets_vector_length) {
   auto f = ExternalConstant(ExternalReference::re_wtf8_dot_exec_raw());
+  auto isolate_ptr = ExternalConstant(ExternalReference::isolate_address());
+  auto result = UncheckedCast<IntPtrT>(CallCFunction(
+      f, MachineType::IntPtr(),
+      std::make_pair(MachineType::Pointer(), isolate_ptr),
+      std::make_pair(MachineType::TaggedPointer(), data),
+      std::make_pair(MachineType::TaggedPointer(), subject_string),
+      std::make_pair(MachineType::Int32(), SmiToInt32(last_index)),
+      std::make_pair(MachineType::Pointer(), result_offsets_vector),
+      std::make_pair(MachineType::Int32(), result_offsets_vector_length)));
+  return Unsigned(result);
+}
+
+TNode<UintPtrT> RegExpBuiltinsAssembler::RegExpExecWtf8Class(
+    TNode<IrRegExpData> data, TNode<String> subject_string,
+    TNode<Smi> last_index, TNode<RawPtrT> result_offsets_vector,
+    TNode<Int32T> result_offsets_vector_length) {
+  auto f = ExternalConstant(ExternalReference::re_wtf8_class_exec_raw());
   auto isolate_ptr = ExternalConstant(ExternalReference::isolate_address());
   auto result = UncheckedCast<IntPtrT>(CallCFunction(
       f, MachineType::IntPtr(),

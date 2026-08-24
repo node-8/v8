@@ -109,6 +109,11 @@ class RegExpBuiltinsAssembler : public CodeStubAssembler {
       TNode<RawPtrT> result_offsets_vector,
       TNode<Int32T> result_offsets_vector_length);
 
+  TNode<UintPtrT> RegExpExecWtf8Class(
+      TNode<IrRegExpData> data, TNode<String> string, TNode<Smi> last_index,
+      TNode<RawPtrT> result_offsets_vector,
+      TNode<Int32T> result_offsets_vector_length);
+
   // This is a wrapper around using the global irregexp mode, i.e. the mode in
   // which a single call into irregexp may return multiple matches.  The
   // once_per_batch function is called once after each irregexp call, and

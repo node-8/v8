@@ -485,6 +485,7 @@ enum class IsolateFieldId : uint8_t;
     "ExperimentalRegExp::MatchForCallFromJs")                                  \
   V(re_atom_exec_raw, "RegExp::AtomExecRaw")                                   \
   V(re_wtf8_dot_exec_raw, "RegExp::Wtf8DotExecRaw")                            \
+  V(re_wtf8_class_exec_raw, "RegExp::Wtf8ClassExecRaw")                        \
   V(allocate_regexp_result_vector, "RegExpResultVector::Allocate")             \
   V(free_regexp_result_vector, "RegExpResultVector::Free")                     \
   V(typed_array_and_rab_gsab_typed_array_elements_kind_shifts,                 \

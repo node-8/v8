@@ -136,6 +136,12 @@ class RegExp final : public AllStatic {
       Address /* String */ subject_address, int32_t index,
       int32_t* result_offsets_vector, int32_t result_offsets_vector_length);
 
+  // Called directly from generated code through ExternalReference.
+  V8_EXPORT_PRIVATE static intptr_t Wtf8ClassExecRaw(
+      Isolate* isolate, Address /* IrRegExpData */ data_address,
+      Address /* String */ subject_address, int32_t index,
+      int32_t* result_offsets_vector, int32_t result_offsets_vector_length);
+
   // Integral return values used throughout regexp code layers.
   static constexpr int kInternalRegExpFailure = 0;
   static constexpr int kInternalRegExpSuccess = 1;
