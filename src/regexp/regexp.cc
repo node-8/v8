@@ -676,6 +676,11 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
         node8_class_tree = GetCaptureWrappedClass(
             quantifier->body(), parse_result.capture_count);
         if (node8_class_tree != nullptr) is_wtf8_class_run = true;
+      } else if (parse_result.capture_count > 0 && quantifier->is_greedy() &&
+                 quantifier->min() == 0 && quantifier->max() == 1) {
+        node8_class_tree = GetCaptureWrappedClass(
+            quantifier->body(), parse_result.capture_count);
+        if (node8_class_tree != nullptr) is_wtf8_class_optional = true;
       } else if (parse_result.capture_count > 0 &&
                  quantifier->is_non_greedy() && quantifier->min() >= 1) {
         node8_class_tree = GetCaptureWrappedClass(
@@ -1177,7 +1182,6 @@ int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
   }
   if (can_be_zero_length && !is_run && is_negated && range_count == 1 &&
       single_range_to <= unibrow::Utf8::kMaxOneByteChar && global) {
-    DCHECK_EQ(capture_count, 0);
     while (matches < max_matches && position <= bytes.size()) {
       int start = static_cast<int>(position);
       size_t match_end = position;
@@ -1196,8 +1200,15 @@ int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
       output[offset + RegExpCapture::StartRegister(0)] = start;
       output[offset + RegExpCapture::EndRegister(0)] =
           static_cast<int>(match_end);
+      const bool is_empty = match_end == static_cast<size_t>(start);
+      const int inner_start = is_empty ? -1 : start;
+      const int inner_end = is_empty ? -1 : static_cast<int>(match_end);
+      for (int capture = 1; capture <= capture_count; ++capture) {
+        output[offset + RegExpCapture::StartRegister(capture)] = inner_start;
+        output[offset + RegExpCapture::EndRegister(capture)] = inner_end;
+      }
       matches++;
-      if (match_end == static_cast<size_t>(start)) {
+      if (is_empty) {
         if (match_end == bytes.size()) break;
         position = match_end + 1;
       } else {
@@ -1207,7 +1218,6 @@ int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
     return matches;
   }
   if (can_be_zero_length && !is_run && range_count == 1) {
-    DCHECK_EQ(capture_count, 0);
     while (matches < max_matches && position <= bytes.size()) {
       int start = static_cast<int>(position);
       size_t match_end = position;
@@ -1229,9 +1239,16 @@ int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
       output[offset + RegExpCapture::StartRegister(0)] = start;
       output[offset + RegExpCapture::EndRegister(0)] =
           static_cast<int>(match_end);
+      const bool is_empty = match_end == static_cast<size_t>(start);
+      const int inner_start = is_empty ? -1 : start;
+      const int inner_end = is_empty ? -1 : static_cast<int>(match_end);
+      for (int capture = 1; capture <= capture_count; ++capture) {
+        output[offset + RegExpCapture::StartRegister(capture)] = inner_start;
+        output[offset + RegExpCapture::EndRegister(capture)] = inner_end;
+      }
       matches++;
       if (!global) break;
-      if (match_end == static_cast<size_t>(start)) {
+      if (is_empty) {
         if (match_end == bytes.size()) break;
         position = match_end + 1;
       } else {
@@ -1241,7 +1258,6 @@ int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
     return matches;
   }
   if (can_be_zero_length) {
-    DCHECK_IMPLIES(capture_count > 0, is_run);
     while (matches < max_matches && position <= bytes.size()) {
       int start = static_cast<int>(position);
       size_t match_end = position;
