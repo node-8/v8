@@ -677,8 +677,13 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
             quantifier->body(), parse_result.capture_count);
         if (node8_class_tree != nullptr) is_wtf8_class_run = true;
       } else if (parse_result.capture_count > 0 &&
-                 (quantifier->is_greedy() ||
-                  quantifier->is_non_greedy()) &&
+                 quantifier->is_non_greedy() && quantifier->min() >= 1) {
+        node8_class_tree = GetCaptureWrappedClass(
+            quantifier->body(), parse_result.capture_count);
+        if (node8_class_tree != nullptr && quantifier->min() >= 2) {
+          node8_class_exact_repetition = quantifier->min();
+        }
+      } else if (parse_result.capture_count > 0 && quantifier->is_greedy() &&
                  quantifier->min() >= 2 &&
                  quantifier->min() == quantifier->max()) {
         node8_class_tree = GetCaptureWrappedClass(
@@ -1141,6 +1146,32 @@ int Wtf8ClassExecRawImpl(const String::FlatContent& subject,
       matches++;
       if (!global) break;
       repeated = 0;
+    }
+    return matches;
+  }
+  if (!can_be_zero_length && !is_run && is_negated && range_count == 1 &&
+      single_range_to <= unibrow::Utf8::kMaxOneByteChar && global &&
+      capture_count > 0) {
+    while (matches < max_matches && position < bytes.size()) {
+      int start = static_cast<int>(position);
+      uint8_t byte = bytes[position];
+      if (V8_LIKELY(byte <= unibrow::Utf8::kMaxOneByteChar)) {
+        position++;
+        if (byte >= single_range_from && byte <= single_range_to) {
+          if (sticky) break;
+          continue;
+        }
+      } else {
+        DecodeNode8ClassCodePoint(bytes, &position);
+      }
+
+      int offset = matches * registers_per_match;
+      for (int capture = 0; capture <= capture_count; ++capture) {
+        output[offset + RegExpCapture::StartRegister(capture)] = start;
+        output[offset + RegExpCapture::EndRegister(capture)] =
+            static_cast<int>(position);
+      }
+      matches++;
     }
     return matches;
   }
