@@ -4187,6 +4187,8 @@ RegExpNode* RegExpCompiler::PreprocessRegExp(RegExpCompileData* data,
   if (v8_flags.utf8_string_semantics && is_one_byte && !IsIgnoreCase(flags())) {
     RegExpQuantifier* quantifier = nullptr;
     bool quantifier_is_complete_tree = false;
+    bool has_captured_quantifier_body = false;
+    RegExpClassRanges* node8_scalar_class = nullptr;
     RegExpTree* unwrapped_tree = data->tree;
     int outer_capture_count = 0;
     while (unwrapped_tree->IsCapture()) {
@@ -4206,22 +4208,43 @@ RegExpNode* RegExpCompiler::PreprocessRegExp(RegExpCompileData* data,
         }
         quantifier = term->AsQuantifier();
       }
+    } else if (data->tree->IsQuantifier()) {
+      RegExpQuantifier* candidate = data->tree->AsQuantifier();
+      RegExpTree* body = candidate->body();
+      int body_capture_count = 0;
+      while (body->IsCapture()) {
+        body_capture_count++;
+        body = body->AsCapture()->body();
+      }
+      if (body_capture_count == data->capture_count &&
+          body->IsClassRanges()) {
+        quantifier = candidate;
+        quantifier_is_complete_tree = true;
+        has_captured_quantifier_body = true;
+        node8_scalar_class = body->AsClassRanges();
+      }
     }
     if (quantifier != nullptr) {
+      if (node8_scalar_class == nullptr &&
+          quantifier->body()->IsClassRanges()) {
+        node8_scalar_class = quantifier->body()->AsClassRanges();
+      }
       const int optional_iterations = quantifier->max() - quantifier->min();
       const bool use_greedy_bounded =
-          data->capture_count == 0 && quantifier->is_greedy() &&
+          (data->capture_count == 0 || quantifier_is_complete_tree) &&
+          quantifier->is_greedy() &&
           quantifier->min() < quantifier->max() &&
           quantifier->min() <= 2 && quantifier->max() <= 5 &&
           optional_iterations <= 3;
       const bool use_non_greedy =
-          quantifier_is_complete_tree && quantifier->is_non_greedy() &&
+          !has_captured_quantifier_body && quantifier_is_complete_tree &&
+          quantifier->is_non_greedy() &&
           quantifier->min() <= 2 &&
           (quantifier->max() == RegExpTree::kInfinity ||
            (quantifier->max() <= 5 && optional_iterations <= 3));
       if ((use_greedy_bounded || use_non_greedy) &&
-          quantifier->body()->IsClassRanges()) {
-        RegExpClassRanges* class_ranges = quantifier->body()->AsClassRanges();
+          node8_scalar_class != nullptr) {
+        RegExpClassRanges* class_ranges = node8_scalar_class;
         ZoneList<CharacterRange>* ranges = class_ranges->ranges(zone());
         CharacterRange::Canonicalize(ranges);
         if (class_ranges->is_negated() && ranges->length() == 1 &&
