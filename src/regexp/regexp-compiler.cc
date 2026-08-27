@@ -4250,7 +4250,8 @@ RegExpNode* RegExpCompiler::PreprocessRegExp(RegExpCompileData* data,
           quantifier->min() <= 2 && quantifier->max() <= 5 &&
           optional_iterations <= 3;
       const bool use_non_greedy =
-          !has_captured_quantifier_body && quantifier_is_complete_tree &&
+          (!has_captured_quantifier_body || has_mixed_capture_wrappers) &&
+          quantifier_is_complete_tree &&
           quantifier->is_non_greedy() &&
           quantifier->min() <= 2 &&
           (quantifier->max() == RegExpTree::kInfinity ||
