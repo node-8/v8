@@ -731,7 +731,6 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
     ZoneList<CharacterRange>* node8_class_ranges = nullptr;
     bool is_wtf8_class_negated = false;
     bool is_wtf8_class_run = false;
-    bool is_wtf8_class_mixed_run = false;
     bool is_wtf8_class_optional = false;
     int node8_class_exact_repetition = -1;
     int node8_class_outer_capture_count = 0;
@@ -747,10 +746,7 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
       node8_class_tree = GetMixedCaptureWrappedGreedyRunClass(
           parse_result.tree, parse_result.capture_count,
           &node8_class_outer_capture_count);
-      if (node8_class_tree != nullptr) {
-        is_wtf8_class_run = true;
-        is_wtf8_class_mixed_run = true;
-      }
+      if (node8_class_tree != nullptr) is_wtf8_class_run = true;
     }
     if (node8_class_tree == nullptr && parse_result.tree->IsQuantifier()) {
       RegExpQuantifier* quantifier = parse_result.tree->AsQuantifier();
@@ -815,19 +811,11 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
       // captures only one-byte members. Positive optional and exact ASCII
       // classes have the same endpoints, while a captured negated run must
       // decode its final scalar start.
-      if (is_wtf8_class_mixed_run &&
-          (!is_wtf8_class_negated || !has_only_ascii_ranges)) {
-        node8_class_ranges = nullptr;
-        is_wtf8_class_negated = false;
-        is_wtf8_class_run = false;
-        node8_class_outer_capture_count = 0;
-      } else if (has_only_ascii_ranges &&
-                 ((is_wtf8_class_run &&
-                   (parse_result.capture_count == 0 ||
-                    !is_wtf8_class_negated)) ||
-                  ((is_wtf8_class_optional ||
-                    node8_class_exact_repetition >= 0) &&
-                   !is_wtf8_class_negated))) {
+      if (has_only_ascii_ranges &&
+          ((is_wtf8_class_run &&
+            (parse_result.capture_count == 0 || !is_wtf8_class_negated)) ||
+           ((is_wtf8_class_optional || node8_class_exact_repetition >= 0) &&
+            !is_wtf8_class_negated))) {
         node8_class_ranges = nullptr;
         is_wtf8_class_negated = false;
         is_wtf8_class_run = false;
@@ -1159,6 +1147,14 @@ V8_INLINE bool Node8ClassContains(Tagged<TrustedByteArray> ranges,
     return code_point >= single_range_from && code_point <= single_range_to;
   }
   static constexpr int kBytesPerRange = 2 * sizeof(uint32_t);
+  if (V8_LIKELY(range_count == 2)) {
+    uint32_t first_from = ranges->get_int(0);
+    uint32_t first_to = ranges->get_int(sizeof(uint32_t));
+    if (code_point >= first_from && code_point <= first_to) return true;
+    return code_point >= ranges->get_int(kBytesPerRange) &&
+           code_point <=
+               ranges->get_int(kBytesPerRange + sizeof(uint32_t));
+  }
   int low = 0;
   int high = range_count;
   while (low < high) {
