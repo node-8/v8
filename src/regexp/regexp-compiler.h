@@ -603,11 +603,18 @@ class RegExpCompiler {
   bool IsRegExpTooBig() const { return reg_exp_too_big_; }
 
   inline bool one_byte() { return one_byte_; }
-  void set_node8_wtf8_scalar_class(RegExpClassRanges* value) {
+  void set_node8_wtf8_scalar_class(RegExpClassRanges* value,
+                                   bool use_range_dispatch = false) {
     node8_wtf8_scalar_class_ = value;
+    node8_wtf8_scalar_range_dispatch_class_ =
+        use_range_dispatch ? value : nullptr;
   }
   bool IsNode8Wtf8ScalarClass(const RegExpClassRanges* value) const {
     return value == node8_wtf8_scalar_class_;
+  }
+  bool UseNode8Wtf8ScalarRangeDispatch(
+      const RegExpClassRanges* value) const {
+    return value == node8_wtf8_scalar_range_dispatch_class_;
   }
   inline bool optimize() { return optimize_; }
   inline void set_optimize(bool value) { optimize_ = value; }
@@ -663,6 +670,7 @@ class RegExpCompiler {
   int current_expansion_factor_;
   FrequencyCollator frequency_collator_;
   RegExpClassRanges* node8_wtf8_scalar_class_ = nullptr;
+  RegExpClassRanges* node8_wtf8_scalar_range_dispatch_class_ = nullptr;
 #ifdef V8_ENABLE_REGEXP_DIAGNOSTICS
   std::unique_ptr<RegExpDiagnostics> diagnostics_;
 #endif

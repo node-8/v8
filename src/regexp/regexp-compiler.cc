@@ -2518,13 +2518,26 @@ EmitResult Wtf8ScalarNode::Emit(RegExpCompiler* compiler, Trace* trace) {
     Label non_ascii;
     assembler->LoadCurrentCharacter(trace->cp_offset(), trace->backtrack(),
                                     true);
-    if (excluded_from_ == excluded_to_) {
-      assembler->CheckCharacter(excluded_from_, trace->backtrack());
+    if (use_range_dispatch_) {
+      Label ascii;
+      if (excluded_to_ < 0x7f) {
+        assembler->CheckCharacterInRange(excluded_to_ + 1, 0x7f, &ascii);
+      }
+      if (excluded_from_ > 0) {
+        assembler->CheckCharacterLT(excluded_from_, &ascii);
+      }
+      assembler->CheckCharacterGT(0x7f, &non_ascii);
+      assembler->GoTo(trace->backtrack());
+      assembler->Bind(&ascii);
     } else {
-      assembler->CheckCharacterInRange(excluded_from_, excluded_to_,
-                                       trace->backtrack());
+      if (excluded_from_ == excluded_to_) {
+        assembler->CheckCharacter(excluded_from_, trace->backtrack());
+      } else {
+        assembler->CheckCharacterInRange(excluded_from_, excluded_to_,
+                                         trace->backtrack());
+      }
+      assembler->CheckCharacterGT(0x7f, &non_ascii);
     }
-    assembler->CheckCharacterGT(0x7f, &non_ascii);
 
     Trace successor_trace(*trace);
     RETURN_IF_ERROR(successor_trace.AdvanceCurrentPositionInTrace(1, compiler));
@@ -4188,6 +4201,7 @@ RegExpNode* RegExpCompiler::PreprocessRegExp(RegExpCompileData* data,
     RegExpQuantifier* quantifier = nullptr;
     bool quantifier_is_complete_tree = false;
     bool has_captured_quantifier_body = false;
+    bool has_mixed_capture_wrappers = false;
     RegExpClassRanges* node8_scalar_class = nullptr;
     RegExpTree* unwrapped_tree = data->tree;
     int outer_capture_count = 0;
@@ -4195,10 +4209,24 @@ RegExpNode* RegExpCompiler::PreprocessRegExp(RegExpCompileData* data,
       outer_capture_count++;
       unwrapped_tree = unwrapped_tree->AsCapture()->body();
     }
-    if (outer_capture_count == data->capture_count &&
-        unwrapped_tree->IsQuantifier()) {
-      quantifier = unwrapped_tree->AsQuantifier();
-      quantifier_is_complete_tree = true;
+    if (unwrapped_tree->IsQuantifier()) {
+      RegExpQuantifier* candidate = unwrapped_tree->AsQuantifier();
+      RegExpTree* body = candidate->body();
+      int body_capture_count = 0;
+      while (body->IsCapture()) {
+        body_capture_count++;
+        body = body->AsCapture()->body();
+      }
+      if (outer_capture_count + body_capture_count == data->capture_count &&
+          body->IsClassRanges()) {
+        quantifier = candidate;
+        quantifier_is_complete_tree = true;
+        if (body_capture_count > 0) {
+          has_captured_quantifier_body = true;
+          has_mixed_capture_wrappers = outer_capture_count > 0;
+          node8_scalar_class = body->AsClassRanges();
+        }
+      }
     } else if (data->capture_count == 0 && data->tree->IsAlternative()) {
       for (RegExpTree* term : *data->tree->AsAlternative()->nodes()) {
         if (!term->IsQuantifier()) continue;
@@ -4207,21 +4235,6 @@ RegExpNode* RegExpCompiler::PreprocessRegExp(RegExpCompileData* data,
           break;
         }
         quantifier = term->AsQuantifier();
-      }
-    } else if (data->tree->IsQuantifier()) {
-      RegExpQuantifier* candidate = data->tree->AsQuantifier();
-      RegExpTree* body = candidate->body();
-      int body_capture_count = 0;
-      while (body->IsCapture()) {
-        body_capture_count++;
-        body = body->AsCapture()->body();
-      }
-      if (body_capture_count == data->capture_count &&
-          body->IsClassRanges()) {
-        quantifier = candidate;
-        quantifier_is_complete_tree = true;
-        has_captured_quantifier_body = true;
-        node8_scalar_class = body->AsClassRanges();
       }
     }
     if (quantifier != nullptr) {
@@ -4249,7 +4262,8 @@ RegExpNode* RegExpCompiler::PreprocessRegExp(RegExpCompileData* data,
         CharacterRange::Canonicalize(ranges);
         if (class_ranges->is_negated() && ranges->length() == 1 &&
             ranges->first().to() <= 0x7f) {
-          set_node8_wtf8_scalar_class(class_ranges);
+          set_node8_wtf8_scalar_class(class_ranges,
+                                      has_mixed_capture_wrappers);
         }
       }
     }

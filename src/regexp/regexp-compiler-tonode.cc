@@ -560,7 +560,8 @@ RegExpNode* RegExpClassRanges::ToNodeImpl(RegExpCompiler* compiler,
     DCHECK_EQ(ranges->length(), 1);
     DCHECK_LE(ranges->first().to(), 0x7f);
     Wtf8ScalarNode* result = zone->New<Wtf8ScalarNode>(
-        ranges->first().from(), ranges->first().to(), on_success);
+        ranges->first().from(), ranges->first().to(), on_success,
+        compiler->UseNode8Wtf8ScalarRangeDispatch(this));
     REGISTER_NODE(result);
     return result;
   }

@@ -513,12 +513,13 @@ class TextNode : public SeqRegExpNode {
 class Wtf8ScalarNode : public SeqRegExpNode {
  public:
   Wtf8ScalarNode(base::uc32 excluded_from, base::uc32 excluded_to,
-                 RegExpNode* on_success)
+                 RegExpNode* on_success, bool use_range_dispatch)
       : SeqRegExpNode(on_success),
         excluded_from_(excluded_from),
         excluded_to_(excluded_to),
         slow_node_(on_success->zone()->New<Wtf8ScalarNode>(
-            excluded_from, excluded_to, on_success, true)) {
+            excluded_from, excluded_to, on_success, true, false)),
+        use_range_dispatch_(use_range_dispatch) {
     DCHECK_LE(excluded_from_, excluded_to_);
     DCHECK_LE(excluded_to_, 0x7f);
   }
@@ -535,17 +536,20 @@ class Wtf8ScalarNode : public SeqRegExpNode {
 
  private:
   Wtf8ScalarNode(base::uc32 excluded_from, base::uc32 excluded_to,
-                 RegExpNode* on_success, bool is_slow_node)
+                 RegExpNode* on_success, bool is_slow_node,
+                 bool use_range_dispatch)
       : SeqRegExpNode(on_success),
         excluded_from_(excluded_from),
         excluded_to_(excluded_to),
         slow_node_(nullptr),
-        is_slow_node_(is_slow_node) {}
+        is_slow_node_(is_slow_node),
+        use_range_dispatch_(use_range_dispatch) {}
 
   base::uc32 excluded_from_;
   base::uc32 excluded_to_;
   Wtf8ScalarNode* slow_node_;
   bool is_slow_node_ = false;
+  bool use_range_dispatch_ = false;
 
   friend Zone;
 };
