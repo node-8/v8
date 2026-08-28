@@ -468,6 +468,19 @@ RegExpTree* GetPositiveClassByteTree(RegExpTree* tree, RegExpFlags flags,
   return zone->New<RegExpDisjunction>(alternatives);
 }
 
+RegExpTree* GetPositiveClassQuantifierByteTree(RegExpTree* tree,
+                                               RegExpFlags flags, Zone* zone) {
+  if (!tree->IsQuantifier()) return nullptr;
+  RegExpQuantifier* quantifier = tree->AsQuantifier();
+  if (quantifier->is_possessive()) return nullptr;
+  RegExpTree* byte_body =
+      GetPositiveClassByteTree(quantifier->body(), flags, zone);
+  if (byte_body == nullptr) return nullptr;
+  return zone->New<RegExpQuantifier>(
+      quantifier->min(), quantifier->max(), quantifier->quantifier_type(),
+      quantifier->index(), byte_body);
+}
+
 RegExpTree* GetCaptureWrappedClass(RegExpTree* tree, int capture_count) {
   int wrapper_count = 0;
   while (tree->IsCapture()) {
@@ -1723,9 +1736,14 @@ bool RegExpImpl::CompileIrregexpFromSource(
 
   if (v8_flags.utf8_string_semantics && is_one_byte &&
       !IsIgnoreCase(flags) && !IsSticky(flags) &&
-      compile_data.capture_count == 0 && compile_data.tree->IsClassRanges()) {
-    if (RegExpTree* byte_tree =
-            GetPositiveClassByteTree(compile_data.tree, flags, &zone)) {
+      compile_data.capture_count == 0) {
+    RegExpTree* byte_tree =
+        GetPositiveClassByteTree(compile_data.tree, flags, &zone);
+    if (byte_tree == nullptr) {
+      byte_tree = GetPositiveClassQuantifierByteTree(compile_data.tree, flags,
+                                                     &zone);
+    }
+    if (byte_tree != nullptr) {
       if (!ContainsMalformedNode8Bytes(pattern)) compile_data.tree = byte_tree;
     }
   }
