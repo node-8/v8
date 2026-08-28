@@ -175,6 +175,10 @@ void RegExpGraphPrinter::Scheduler::VisitText(TextNode* node) {
 
 void RegExpGraphPrinter::Scheduler::VisitWtf8Scalar(Wtf8ScalarNode* node) {
   VisitSeqRegExpNode(node->AsSeqRegExpNode());
+  if (node->positive_non_ascii_node() != nullptr) {
+    AddEdge(node, node->positive_non_ascii_node());
+    Visit(node->positive_non_ascii_node());
+  }
 }
 
 namespace {

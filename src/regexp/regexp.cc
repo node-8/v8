@@ -432,7 +432,8 @@ RegExpTree* NewNode8ByteSequenceTree(const Node8ByteSequence& sequence,
 }
 
 RegExpTree* GetPositiveClassByteTree(RegExpTree* tree, RegExpFlags flags,
-                                     Zone* zone) {
+                                     Zone* zone,
+                                     bool non_ascii_only = false) {
   if (!tree->IsClassRanges()) return nullptr;
   RegExpClassRanges* character_class = tree->AsClassRanges();
   if (character_class->is_negated()) return nullptr;
@@ -462,8 +463,10 @@ RegExpTree* GetPositiveClassByteTree(RegExpTree* tree, RegExpFlags flags,
       zone->New<ZoneList<RegExpTree*>>(static_cast<int>(sequences.size()),
                                       zone);
   for (const Node8ByteSequence& sequence : sequences) {
+    if (non_ascii_only && sequence.length == 1) continue;
     alternatives->Add(NewNode8ByteSequenceTree(sequence, zone), zone);
   }
+  if (alternatives->is_empty()) return nullptr;
   if (alternatives->length() == 1) return alternatives->first();
   return zone->New<RegExpDisjunction>(alternatives);
 }
@@ -574,6 +577,54 @@ RegExpTree* GetCapturedPositiveClassQuantifierByteTree(RegExpTree* tree,
   alternatives->Add(ascii_tree, zone);
   alternatives->Add(byte_tree, zone);
   return zone->New<RegExpDisjunction>(alternatives);
+}
+
+RegExpTree* GetPositiveScalarDispatchClassTree(RegExpTree* tree,
+                                               RegExpFlags flags, Zone* zone) {
+  RegExpTree* non_ascii_tree = GetPositiveClassByteTree(
+      tree, flags, zone, true);
+  if (non_ascii_tree == nullptr) return nullptr;
+
+  ZoneList<CharacterRange>* ranges = tree->AsClassRanges()->ranges(zone);
+  ZoneList<CharacterRange>* ascii_ranges =
+      zone->New<ZoneList<CharacterRange>>(ranges->length(), zone);
+  for (CharacterRange range : *ranges) {
+    if (range.from() > unibrow::Utf8::kMaxOneByteChar) break;
+    ascii_ranges->Add(
+        CharacterRange::Range(
+            range.from(), std::min(range.to(), unibrow::Utf8::kMaxOneByteChar)),
+        zone);
+  }
+  if (ascii_ranges->is_empty()) return non_ascii_tree;
+  RegExpClassRanges* dispatch_class = zone->New<RegExpClassRanges>(
+      zone, ascii_ranges, RegExpClassRanges::IS_CERTAINLY_ONE_CODE_POINT);
+  dispatch_class->set_node8_positive_non_ascii_tree(non_ascii_tree);
+  return dispatch_class;
+}
+
+RegExpTree* GetOuterCapturedPositiveClassQuantifierTree(RegExpTree* tree,
+                                                        int capture_count,
+                                                        RegExpFlags flags,
+                                                        Zone* zone) {
+  int outer_capture_count = 0;
+  RegExpTree* quantifier_tree = UnwrapCaptureChain(tree, &outer_capture_count);
+  if (outer_capture_count == 0 || outer_capture_count != capture_count ||
+      !quantifier_tree->IsQuantifier()) {
+    return nullptr;
+  }
+  RegExpQuantifier* quantifier = quantifier_tree->AsQuantifier();
+  if (quantifier->is_possessive() || quantifier->min() == quantifier->max() ||
+      !quantifier->body()->IsClassRanges()) {
+    return nullptr;
+  }
+
+  RegExpTree* dispatch_class =
+      GetPositiveScalarDispatchClassTree(quantifier->body(), flags, zone);
+  if (dispatch_class == nullptr) return nullptr;
+  RegExpTree* rebuilt_quantifier = zone->New<RegExpQuantifier>(
+      quantifier->min(), quantifier->max(), quantifier->quantifier_type(),
+      quantifier->index(), dispatch_class);
+  return RebuildCaptureChain(tree, rebuilt_quantifier, zone);
 }
 
 RegExpTree* GetCaptureWrappedClass(RegExpTree* tree, int capture_count) {
@@ -1841,6 +1892,10 @@ bool RegExpImpl::CompileIrregexpFromSource(
     } else {
       byte_tree = GetCapturedPositiveClassQuantifierByteTree(
           compile_data.tree, compile_data.capture_count, flags, &zone);
+      if (byte_tree == nullptr) {
+        byte_tree = GetOuterCapturedPositiveClassQuantifierTree(
+            compile_data.tree, compile_data.capture_count, flags, &zone);
+      }
     }
     if (byte_tree != nullptr) {
       if (!ContainsMalformedNode8Bytes(pattern)) compile_data.tree = byte_tree;

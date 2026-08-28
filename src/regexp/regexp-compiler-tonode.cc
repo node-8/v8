@@ -555,6 +555,17 @@ RegExpNode* RegExpClassRanges::ToNodeImpl(RegExpCompiler* compiler,
   Zone* const zone = compiler->zone();
   ZoneList<CharacterRange>* ranges = this->ranges(zone);
 
+  if (node8_positive_non_ascii_tree() != nullptr) {
+    DCHECK(!is_negated());
+    DCHECK(ranges->is_empty() || ranges->last().to() <= 0x7f);
+    RegExpNode* non_ascii_node =
+        node8_positive_non_ascii_tree()->ToNode(compiler, on_success);
+    Wtf8ScalarNode* result =
+        zone->New<Wtf8ScalarNode>(ranges, non_ascii_node, on_success);
+    REGISTER_NODE(result);
+    return result;
+  }
+
   if (compiler->IsNode8Wtf8ScalarClass(this)) {
     DCHECK(is_negated());
     DCHECK_EQ(ranges->length(), 1);

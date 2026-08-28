@@ -370,10 +370,17 @@ class RegExpClassRanges final : public RegExpTree {
   bool is_certainly_two_code_points() const {
     return (class_ranges_flags_ & IS_CERTAINLY_TWO_CODE_POINTS) != 0;
   }
+  RegExpTree* node8_positive_non_ascii_tree() const {
+    return node8_positive_non_ascii_tree_;
+  }
+  void set_node8_positive_non_ascii_tree(RegExpTree* tree) {
+    node8_positive_non_ascii_tree_ = tree;
+  }
 
  private:
   CharacterSet set_;
   ClassRangesFlags class_ranges_flags_;
+  RegExpTree* node8_positive_non_ascii_tree_ = nullptr;
 };
 
 struct CharacterClassStringLess {

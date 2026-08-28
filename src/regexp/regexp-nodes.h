@@ -14,6 +14,7 @@ namespace internal {
 
 class AlternativeGenerationList;
 class BoyerMooreLookahead;
+class CharacterRange;
 class SpecialLoopState;
 class NegativeSubmatchSuccess;
 class NodeVisitor;
@@ -523,6 +524,15 @@ class Wtf8ScalarNode : public SeqRegExpNode {
     DCHECK_LE(excluded_from_, excluded_to_);
     DCHECK_LE(excluded_to_, 0x7f);
   }
+  Wtf8ScalarNode(ZoneList<CharacterRange>* positive_ascii_ranges,
+                 RegExpNode* positive_non_ascii_node, RegExpNode* on_success)
+      : SeqRegExpNode(on_success),
+        excluded_from_(0),
+        excluded_to_(0),
+        slow_node_(nullptr),
+        positive_ascii_ranges_(positive_ascii_ranges),
+        positive_non_ascii_node_(positive_non_ascii_node),
+        is_positive_class_(true) {}
   Wtf8ScalarNode* AsWtf8ScalarNode() override { return this; }
   void Accept(NodeVisitor* visitor) override;
   V8_WARN_UNUSED_RESULT EmitResult Emit(RegExpCompiler* compiler,
@@ -533,6 +543,13 @@ class Wtf8ScalarNode : public SeqRegExpNode {
                     bool not_at_start) override;
   base::uc32 excluded_from() const { return excluded_from_; }
   base::uc32 excluded_to() const { return excluded_to_; }
+  bool is_positive_class() const { return is_positive_class_; }
+  ZoneList<CharacterRange>* positive_ascii_ranges() const {
+    return positive_ascii_ranges_;
+  }
+  RegExpNode* positive_non_ascii_node() const {
+    return positive_non_ascii_node_;
+  }
 
  private:
   Wtf8ScalarNode(base::uc32 excluded_from, base::uc32 excluded_to,
@@ -548,8 +565,11 @@ class Wtf8ScalarNode : public SeqRegExpNode {
   base::uc32 excluded_from_;
   base::uc32 excluded_to_;
   Wtf8ScalarNode* slow_node_;
+  ZoneList<CharacterRange>* positive_ascii_ranges_ = nullptr;
+  RegExpNode* positive_non_ascii_node_ = nullptr;
   bool is_slow_node_ = false;
   bool use_range_dispatch_ = false;
+  bool is_positive_class_ = false;
 
   friend Zone;
 };

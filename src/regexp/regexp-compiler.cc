@@ -2505,6 +2505,36 @@ EmitResult TextNode::Emit(RegExpCompiler* compiler, Trace* trace) {
 
 EmitResult Wtf8ScalarNode::Emit(RegExpCompiler* compiler, Trace* trace) {
   TRACE_EMIT("Wtf8Scalar");
+  if (is_positive_class_) {
+    LimitResult limit_result = LimitVersions(compiler, trace);
+    if (limit_result == DONE) return EmitResult::Success();
+    DCHECK_EQ(limit_result, CONTINUE);
+
+    RegExpMacroAssembler* assembler = compiler->macro_assembler();
+    Label ascii_match;
+    Label non_ascii;
+    assembler->LoadCurrentCharacter(trace->cp_offset(), trace->backtrack(),
+                                    true);
+    for (CharacterRange range : *positive_ascii_ranges_) {
+      if (range.from() == range.to()) {
+        assembler->CheckCharacter(range.from(), &ascii_match);
+      } else {
+        assembler->CheckCharacterInRange(range.from(), range.to(),
+                                         &ascii_match);
+      }
+    }
+    assembler->CheckCharacterGT(0x7f, &non_ascii);
+    assembler->GoTo(trace->backtrack());
+
+    assembler->Bind(&ascii_match);
+    Trace successor_trace(*trace);
+    RETURN_IF_ERROR(successor_trace.AdvanceCurrentPositionInTrace(1, compiler));
+    RecursionCheck rc(compiler);
+    RETURN_IF_ERROR(on_success()->Emit(compiler, &successor_trace));
+
+    assembler->Bind(&non_ascii);
+    return positive_non_ascii_node_->Emit(compiler, trace);
+  }
   if (is_slow_node_ && !trace->is_trivial()) {
     return trace->Flush(compiler, this);
   }
@@ -3975,6 +4005,10 @@ class Analysis : public NodeVisitor {
   void VisitWtf8Scalar(Wtf8ScalarNode* that) override {
     EnsureAnalyzed(that->on_success());
     if (has_failed()) return;
+    if (that->positive_non_ascii_node() != nullptr) {
+      EnsureAnalyzed(that->positive_non_ascii_node());
+      if (has_failed()) return;
+    }
     STATIC_FOR_EACH(Propagators::VisitWtf8Scalar(that));
   }
 
