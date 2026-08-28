@@ -468,6 +468,14 @@ RegExpTree* GetPositiveClassByteTree(RegExpTree* tree, RegExpFlags flags,
   return zone->New<RegExpDisjunction>(alternatives);
 }
 
+RegExpTree* UnwrapCaptureChain(RegExpTree* tree, int* capture_count) {
+  while (tree->IsCapture()) {
+    (*capture_count)++;
+    tree = tree->AsCapture()->body();
+  }
+  return tree;
+}
+
 RegExpTree* GetPositiveClassQuantifierByteTree(RegExpTree* tree,
                                                RegExpFlags flags, Zone* zone) {
   if (!tree->IsQuantifier()) return nullptr;
@@ -479,6 +487,93 @@ RegExpTree* GetPositiveClassQuantifierByteTree(RegExpTree* tree,
   return zone->New<RegExpQuantifier>(
       quantifier->min(), quantifier->max(), quantifier->quantifier_type(),
       quantifier->index(), byte_body);
+}
+
+RegExpTree* RebuildCaptureChain(RegExpTree* tree, RegExpTree* body,
+                                Zone* zone) {
+  if (!tree->IsCapture()) return body;
+  RegExpCapture* capture = tree->AsCapture();
+  RegExpTree* inner = RebuildCaptureChain(capture->body(), body, zone);
+  RegExpCapture* rebuilt = zone->New<RegExpCapture>(capture->index());
+  rebuilt->set_name(capture->name());
+  rebuilt->set_body(inner);
+  return rebuilt;
+}
+
+RegExpTree* GetPositiveAsciiClassTree(RegExpTree* tree, Zone* zone) {
+  DCHECK(tree->IsClassRanges());
+  ZoneList<CharacterRange>* ranges = tree->AsClassRanges()->ranges(zone);
+  ZoneList<CharacterRange>* ascii_ranges =
+      zone->New<ZoneList<CharacterRange>>(ranges->length(), zone);
+  for (CharacterRange range : *ranges) {
+    if (range.from() > unibrow::Utf8::kMaxOneByteChar) break;
+    ascii_ranges->Add(
+        CharacterRange::Range(
+            range.from(), std::min(range.to(), unibrow::Utf8::kMaxOneByteChar)),
+        zone);
+  }
+  if (ascii_ranges->is_empty()) return nullptr;
+  return zone->New<RegExpClassRanges>(
+      zone, ascii_ranges, RegExpClassRanges::IS_CERTAINLY_ONE_CODE_POINT);
+}
+
+RegExpTree* GetUnrolledAsciiCaptureTree(RegExpTree* capture_tree,
+                                        RegExpTree* class_tree, int repetition,
+                                        Zone* zone) {
+  if (repetition == 0) return zone->New<RegExpEmpty>();
+  ZoneList<RegExpTree*>* nodes =
+      zone->New<ZoneList<RegExpTree*>>(repetition, zone);
+  for (int i = 0; i < repetition; ++i) {
+    RegExpTree* ascii_class = GetPositiveAsciiClassTree(class_tree, zone);
+    DCHECK_NOT_NULL(ascii_class);
+    nodes->Add(RebuildCaptureChain(capture_tree, ascii_class, zone), zone);
+  }
+  if (nodes->length() == 1) return nodes->first();
+  return zone->New<RegExpAlternative>(nodes);
+}
+
+RegExpTree* GetCapturedPositiveClassQuantifierByteTree(RegExpTree* tree,
+                                                       int capture_count,
+                                                       RegExpFlags flags,
+                                                       Zone* zone) {
+  int outer_capture_count = 0;
+  RegExpTree* quantifier_tree = UnwrapCaptureChain(tree, &outer_capture_count);
+  if (!quantifier_tree->IsQuantifier()) return nullptr;
+  RegExpQuantifier* quantifier = quantifier_tree->AsQuantifier();
+  if (quantifier->is_possessive()) return nullptr;
+
+  int body_capture_count = 0;
+  RegExpTree* class_tree =
+      UnwrapCaptureChain(quantifier->body(), &body_capture_count);
+  if (body_capture_count == 0 ||
+      outer_capture_count + body_capture_count != capture_count) {
+    return nullptr;
+  }
+
+  RegExpTree* byte_body = GetPositiveClassByteTree(class_tree, flags, zone);
+  if (byte_body == nullptr) return nullptr;
+  byte_body = RebuildCaptureChain(quantifier->body(), byte_body, zone);
+  RegExpTree* byte_quantifier = zone->New<RegExpQuantifier>(
+      quantifier->min(), quantifier->max(), quantifier->quantifier_type(),
+      quantifier->index(), byte_body);
+  RegExpTree* byte_tree = RebuildCaptureChain(tree, byte_quantifier, zone);
+
+  const int fast_repetition =
+      quantifier->is_greedy() ? quantifier->max() : quantifier->min();
+  static constexpr int kMaxUnrolledAsciiRepetition = 8;
+  if (fast_repetition > kMaxUnrolledAsciiRepetition ||
+      GetPositiveAsciiClassTree(class_tree, zone) == nullptr) {
+    return byte_tree;
+  }
+
+  RegExpTree* ascii_body = GetUnrolledAsciiCaptureTree(
+      quantifier->body(), class_tree, fast_repetition, zone);
+  RegExpTree* ascii_tree = RebuildCaptureChain(tree, ascii_body, zone);
+  ZoneList<RegExpTree*>* alternatives =
+      zone->New<ZoneList<RegExpTree*>>(2, zone);
+  alternatives->Add(ascii_tree, zone);
+  alternatives->Add(byte_tree, zone);
+  return zone->New<RegExpDisjunction>(alternatives);
 }
 
 RegExpTree* GetCaptureWrappedClass(RegExpTree* tree, int capture_count) {
@@ -1734,14 +1829,18 @@ bool RegExpImpl::CompileIrregexpFromSource(
   // pattern strings from generating invalid regexp code.
   SBXCHECK_EQ(compile_data.capture_count, re_data->capture_count());
 
-  if (v8_flags.utf8_string_semantics && is_one_byte &&
-      !IsIgnoreCase(flags) && !IsSticky(flags) &&
-      compile_data.capture_count == 0) {
-    RegExpTree* byte_tree =
-        GetPositiveClassByteTree(compile_data.tree, flags, &zone);
-    if (byte_tree == nullptr) {
-      byte_tree = GetPositiveClassQuantifierByteTree(compile_data.tree, flags,
-                                                     &zone);
+  if (v8_flags.utf8_string_semantics && is_one_byte && !IsIgnoreCase(flags) &&
+      !IsSticky(flags)) {
+    RegExpTree* byte_tree = nullptr;
+    if (compile_data.capture_count == 0) {
+      byte_tree = GetPositiveClassByteTree(compile_data.tree, flags, &zone);
+      if (byte_tree == nullptr) {
+        byte_tree =
+            GetPositiveClassQuantifierByteTree(compile_data.tree, flags, &zone);
+      }
+    } else {
+      byte_tree = GetCapturedPositiveClassQuantifierByteTree(
+          compile_data.tree, compile_data.capture_count, flags, &zone);
     }
     if (byte_tree != nullptr) {
       if (!ContainsMalformedNode8Bytes(pattern)) compile_data.tree = byte_tree;
