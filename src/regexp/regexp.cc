@@ -627,6 +627,80 @@ RegExpTree* GetOuterCapturedPositiveClassQuantifierTree(RegExpTree* tree,
   return RebuildCaptureChain(tree, rebuilt_quantifier, zone);
 }
 
+RegExpTree* GetExactAsciiClassRepetition(RegExpTree* class_tree, int repetition,
+                                         Zone* zone) {
+  if (repetition == 0) return zone->New<RegExpEmpty>();
+  ZoneList<RegExpTree*>* nodes =
+      zone->New<ZoneList<RegExpTree*>>(repetition, zone);
+  for (int i = 0; i < repetition; ++i) {
+    RegExpTree* ascii_class = GetPositiveAsciiClassTree(class_tree, zone);
+    DCHECK_NOT_NULL(ascii_class);
+    nodes->Add(ascii_class, zone);
+  }
+  if (nodes->length() == 1) return nodes->first();
+  return zone->New<RegExpAlternative>(nodes);
+}
+
+RegExpTree* GetOuterCapturedPositiveClassQuantifierTailTree(RegExpTree* tree,
+                                                            int capture_count,
+                                                            RegExpFlags flags,
+                                                            Zone* zone) {
+  if (!tree->IsAlternative()) return nullptr;
+  ZoneList<RegExpTree*>* nodes = tree->AsAlternative()->nodes();
+  if (nodes->length() != 2 || !nodes->at(1)->IsAtom()) return nullptr;
+  RegExpAtom* tail = nodes->at(1)->AsAtom();
+  if (tail->length() != 1 || tail->data().at(0) > 0x7f) return nullptr;
+
+  int outer_capture_count = 0;
+  RegExpTree* quantifier_tree =
+      UnwrapCaptureChain(nodes->at(0), &outer_capture_count);
+  if (outer_capture_count == 0 || outer_capture_count != capture_count ||
+      !quantifier_tree->IsQuantifier()) {
+    return nullptr;
+  }
+  RegExpQuantifier* quantifier = quantifier_tree->AsQuantifier();
+  static constexpr int kMaxAsciiTailRepetition = 8;
+  if (!quantifier->is_greedy() || quantifier->min() == quantifier->max() ||
+      quantifier->max() == RegExpTree::kInfinity ||
+      quantifier->max() > kMaxAsciiTailRepetition ||
+      !quantifier->body()->IsClassRanges()) {
+    return nullptr;
+  }
+
+  RegExpTree* scalar_term = GetOuterCapturedPositiveClassQuantifierTree(
+      nodes->at(0), capture_count, flags, zone);
+  if (scalar_term == nullptr) return nullptr;
+  ZoneList<RegExpTree*>* scalar_nodes =
+      zone->New<ZoneList<RegExpTree*>>(2, zone);
+  scalar_nodes->Add(scalar_term, zone);
+  scalar_nodes->Add(tail, zone);
+  RegExpTree* scalar_fallback = zone->New<RegExpAlternative>(scalar_nodes);
+
+  RegExpTree* class_tree = quantifier->body();
+  if (GetPositiveAsciiClassTree(class_tree, zone) == nullptr) {
+    return scalar_fallback;
+  }
+  ZoneList<RegExpTree*>* repetitions = zone->New<ZoneList<RegExpTree*>>(
+      quantifier->max() - quantifier->min() + 1, zone);
+  for (int count = quantifier->max(); count >= quantifier->min(); --count) {
+    repetitions->Add(GetExactAsciiClassRepetition(class_tree, count, zone),
+                     zone);
+  }
+  RegExpTree* ascii_choice = zone->New<RegExpDisjunction>(repetitions);
+  RegExpTree* ascii_capture =
+      RebuildCaptureChain(nodes->at(0), ascii_choice, zone);
+  ZoneList<RegExpTree*>* ascii_nodes =
+      zone->New<ZoneList<RegExpTree*>>(2, zone);
+  ascii_nodes->Add(ascii_capture, zone);
+  ascii_nodes->Add(tail, zone);
+
+  ZoneList<RegExpTree*>* alternatives =
+      zone->New<ZoneList<RegExpTree*>>(2, zone);
+  alternatives->Add(zone->New<RegExpAlternative>(ascii_nodes), zone);
+  alternatives->Add(scalar_fallback, zone);
+  return zone->New<RegExpDisjunction>(alternatives);
+}
+
 RegExpTree* GetCaptureWrappedClass(RegExpTree* tree, int capture_count) {
   int wrapper_count = 0;
   while (tree->IsCapture()) {
@@ -1894,6 +1968,10 @@ bool RegExpImpl::CompileIrregexpFromSource(
           compile_data.tree, compile_data.capture_count, flags, &zone);
       if (byte_tree == nullptr) {
         byte_tree = GetOuterCapturedPositiveClassQuantifierTree(
+            compile_data.tree, compile_data.capture_count, flags, &zone);
+      }
+      if (byte_tree == nullptr) {
+        byte_tree = GetOuterCapturedPositiveClassQuantifierTailTree(
             compile_data.tree, compile_data.capture_count, flags, &zone);
       }
     }
