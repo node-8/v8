@@ -678,7 +678,13 @@ RegExpTree* GetOuterCapturedPositiveClassQuantifierTailTree(RegExpTree* tree,
   ZoneList<RegExpTree*>* nodes = tree->AsAlternative()->nodes();
   if (nodes->length() != 2 || !nodes->at(1)->IsAtom()) return nullptr;
   RegExpAtom* tail = nodes->at(1)->AsAtom();
-  if (tail->length() != 1 || tail->data().at(0) > 0x7f) return nullptr;
+  static constexpr int kMaxAsciiTailLength = 8;
+  if (tail->length() == 0 || tail->length() > kMaxAsciiTailLength) {
+    return nullptr;
+  }
+  for (int i = 0; i < tail->length(); ++i) {
+    if (tail->data().at(i) > 0x7f) return nullptr;
+  }
 
   int outer_capture_count = 0;
   RegExpTree* quantifier_tree =
