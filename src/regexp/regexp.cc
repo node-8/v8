@@ -695,11 +695,10 @@ RegExpTree* GetLazyAsciiClassRepetition(RegExpTree* class_tree, int minimum,
   return zone->New<RegExpAlternative>(nodes);
 }
 
-bool IsShortAsciiAtom(RegExpTree* tree) {
+bool IsAsciiAtomWithinLength(RegExpTree* tree, int maximum_length) {
   if (!tree->IsAtom()) return false;
   RegExpAtom* atom = tree->AsAtom();
-  static constexpr int kMaxShortAsciiAtomLength = 8;
-  if (atom->length() == 0 || atom->length() > kMaxShortAsciiAtomLength) {
+  if (atom->length() == 0 || atom->length() > maximum_length) {
     return false;
   }
   for (int i = 0; i < atom->length(); ++i) {
@@ -714,17 +713,27 @@ RegExpTree* GetOuterCapturedPositiveClassQuantifierTailTree(RegExpTree* tree,
                                                             Zone* zone) {
   if (!tree->IsAlternative()) return nullptr;
   ZoneList<RegExpTree*>* nodes = tree->AsAlternative()->nodes();
+  static constexpr int kMaxExistingAsciiAtomLength = 8;
+  static constexpr int kMaxBodyAsciiAtomLength = 16;
   int captured_term_index = 0;
   RegExpAtom* prefix = nullptr;
   if (nodes->length() == 3) {
-    if (!IsShortAsciiAtom(nodes->at(0))) return nullptr;
+    if (!IsAsciiAtomWithinLength(nodes->at(0), kMaxBodyAsciiAtomLength)) {
+      return nullptr;
+    }
     prefix = nodes->at(0)->AsAtom();
     captured_term_index = 1;
   } else if (nodes->length() != 2) {
     return nullptr;
   }
-  if (!IsShortAsciiAtom(nodes->at(captured_term_index + 1))) return nullptr;
+  if (!IsAsciiAtomWithinLength(nodes->at(captured_term_index + 1),
+                               kMaxBodyAsciiAtomLength)) {
+    return nullptr;
+  }
   RegExpAtom* tail = nodes->at(captured_term_index + 1)->AsAtom();
+  const bool has_medium_ascii_atom =
+      (prefix != nullptr && prefix->length() > kMaxExistingAsciiAtomLength) ||
+      tail->length() > kMaxExistingAsciiAtomLength;
   RegExpTree* captured_term = nodes->at(captured_term_index);
 
   int outer_capture_count = 0;
@@ -744,6 +753,7 @@ RegExpTree* GetOuterCapturedPositiveClassQuantifierTailTree(RegExpTree* tree,
   if ((!is_pure_outer && !is_body_or_mixed) || !class_tree->IsClassRanges()) {
     return nullptr;
   }
+  if (has_medium_ascii_atom && !is_body_or_mixed) return nullptr;
   const bool is_pure_outer_unbounded =
       is_pure_outer && quantifier->max() == RegExpTree::kInfinity;
   static constexpr int kMaxAsciiTailRepetition = 8;
