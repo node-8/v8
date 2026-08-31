@@ -246,16 +246,18 @@ for (const input of corpora) {
   }
 }
 
-// The old boundary remains accepted; the new boundary stops exactly at 16.
+// The old boundary remains accepted; 17-byte body/mixed atoms are handled by
+// the long-ASCII extension.
 assertMatchIndices(
     [[0, 12], [0, 4], [0, 4]], /(([A-C\u00e9-\u00eb]+))12345678/du,
     eAcute + eCircumflex + '12345678');
-assertNull(
-    /(([A-C\u00e9-\u00eb])+)1234567890abcdefg/du.exec(
-        eAcute + eCircumflex + tail17));
-assertNull(
-    /prefix-1234567890(([A-C\u00e9-\u00eb])+)xy/du.exec(
-        prefix17 + eAcute + eCircumflex + 'xy'));
+assertMatchIndices(
+    [[0, 21], [0, 4], [2, 4]], /(([A-C\u00e9-\u00eb])+)1234567890abcdefg/du,
+    eAcute + eCircumflex + tail17);
+assertMatchIndices(
+    [[0, 23], [17, 21], [19, 21]],
+    /prefix-1234567890(([A-C\u00e9-\u00eb])+)xy/du,
+    prefix17 + eAcute + eCircumflex + 'xy');
 assertMatchIndices(
     [[0, 13], [0, 4], [2, 4]], /(([A-C\u00e9-\u00eb]){1,9})123456789/du,
     eAcute + eCircumflex + tail9);

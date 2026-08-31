@@ -714,7 +714,7 @@ RegExpTree* GetOuterCapturedPositiveClassQuantifierTailTree(RegExpTree* tree,
   if (!tree->IsAlternative()) return nullptr;
   ZoneList<RegExpTree*>* nodes = tree->AsAlternative()->nodes();
   static constexpr int kMaxExistingAsciiAtomLength = 8;
-  static constexpr int kMaxBodyAsciiAtomLength = 16;
+  static constexpr int kMaxBodyAsciiAtomLength = 32;
   int captured_term_index = 0;
   RegExpAtom* prefix = nullptr;
   if (nodes->length() == 3) {
