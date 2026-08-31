@@ -762,13 +762,14 @@ RegExpTree* GetOuterCapturedPositiveClassQuantifierTailTree(RegExpTree* tree,
        !is_pure_outer_unbounded) ||
       (quantifier->max() != RegExpTree::kInfinity &&
        quantifier->max() > kMaxAsciiTailRepetition &&
-       (!is_body_or_mixed || quantifier->min() == quantifier->max())) ||
+       !is_body_or_mixed) ||
       (quantifier->min() == quantifier->max() && quantifier->min() < 2)) {
     return nullptr;
   }
 
   RegExpTree* suffix;
   if (quantifier->min() == quantifier->max() &&
+      quantifier->max() <= kMaxAsciiTailRepetition &&
       (capture_count > 1 || body_capture_count > 0)) {
     RegExpTree* scalar_choice = GetExactScalarClassRepetition(
         class_tree, quantifier->min(), flags, zone,
