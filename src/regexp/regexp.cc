@@ -660,13 +660,17 @@ RegExpTree* GetExactScalarClassRepetition(RegExpTree* class_tree,
 }
 
 RegExpTree* GetLazyAsciiClassRepetition(RegExpTree* class_tree, int minimum,
-                                        int maximum, Zone* zone) {
+                                        int maximum, Zone* zone,
+                                        RegExpTree* capture_tree = nullptr) {
   RegExpTree* optional = zone->New<RegExpEmpty>();
   for (int count = minimum; count < maximum; ++count) {
     ZoneList<RegExpTree*>* extension_nodes =
         zone->New<ZoneList<RegExpTree*>>(2, zone);
     RegExpTree* ascii_class = GetPositiveAsciiClassTree(class_tree, zone);
     DCHECK_NOT_NULL(ascii_class);
+    if (capture_tree != nullptr) {
+      ascii_class = RebuildCaptureChain(capture_tree, ascii_class, zone);
+    }
     extension_nodes->Add(ascii_class, zone);
     extension_nodes->Add(optional, zone);
 
@@ -682,6 +686,9 @@ RegExpTree* GetLazyAsciiClassRepetition(RegExpTree* class_tree, int minimum,
   for (int count = 0; count < minimum; ++count) {
     RegExpTree* ascii_class = GetPositiveAsciiClassTree(class_tree, zone);
     DCHECK_NOT_NULL(ascii_class);
+    if (capture_tree != nullptr) {
+      ascii_class = RebuildCaptureChain(capture_tree, ascii_class, zone);
+    }
     nodes->Add(ascii_class, zone);
   }
   nodes->Add(optional, zone);
@@ -731,11 +738,10 @@ RegExpTree* GetOuterCapturedPositiveClassQuantifierTailTree(RegExpTree* tree,
   const bool is_pure_outer = outer_capture_count > 0 &&
                              outer_capture_count == capture_count &&
                              body_capture_count == 0;
-  const bool is_body_or_mixed_exact =
-      quantifier->min() == quantifier->max() && body_capture_count > 0 &&
+  const bool is_body_or_mixed =
+      body_capture_count > 0 &&
       outer_capture_count + body_capture_count == capture_count;
-  if ((!is_pure_outer && !is_body_or_mixed_exact) ||
-      !class_tree->IsClassRanges()) {
+  if ((!is_pure_outer && !is_body_or_mixed) || !class_tree->IsClassRanges()) {
     return nullptr;
   }
   static constexpr int kMaxAsciiTailRepetition = 8;
@@ -761,8 +767,20 @@ RegExpTree* GetOuterCapturedPositiveClassQuantifierTailTree(RegExpTree* tree,
     scalar_nodes->Add(tail, zone);
     suffix = zone->New<RegExpAlternative>(scalar_nodes);
   } else {
-    RegExpTree* scalar_term = GetOuterCapturedPositiveClassQuantifierTree(
-        captured_term, capture_count, flags, zone, true);
+    RegExpTree* scalar_term;
+    if (body_capture_count == 0) {
+      scalar_term = GetOuterCapturedPositiveClassQuantifierTree(
+          captured_term, capture_count, flags, zone, true);
+    } else {
+      RegExpTree* scalar_body =
+          GetPositiveScalarDispatchClassTree(class_tree, flags, zone);
+      if (scalar_body == nullptr) return nullptr;
+      scalar_body = RebuildCaptureChain(quantifier->body(), scalar_body, zone);
+      RegExpTree* scalar_quantifier = zone->New<RegExpQuantifier>(
+          quantifier->min(), quantifier->max(), quantifier->quantifier_type(),
+          quantifier->index(), scalar_body);
+      scalar_term = RebuildCaptureChain(captured_term, scalar_quantifier, zone);
+    }
     if (scalar_term == nullptr) return nullptr;
     ZoneList<RegExpTree*>* scalar_nodes =
         zone->New<ZoneList<RegExpTree*>>(2, zone);
@@ -782,13 +800,18 @@ RegExpTree* GetOuterCapturedPositiveClassQuantifierTailTree(RegExpTree* tree,
             quantifier->max() - quantifier->min() + 1, zone);
         for (int count = quantifier->max(); count >= quantifier->min();
              --count) {
-          repetitions->Add(
-              GetExactAsciiClassRepetition(class_tree, count, zone), zone);
+          RegExpTree* repetition =
+              body_capture_count == 0
+                  ? GetExactAsciiClassRepetition(class_tree, count, zone)
+                  : GetUnrolledAsciiCaptureTree(quantifier->body(), class_tree,
+                                                count, zone);
+          repetitions->Add(repetition, zone);
         }
         ascii_choice = zone->New<RegExpDisjunction>(repetitions);
       } else {
         ascii_choice = GetLazyAsciiClassRepetition(
-            class_tree, quantifier->min(), quantifier->max(), zone);
+            class_tree, quantifier->min(), quantifier->max(), zone,
+            body_capture_count > 0 ? quantifier->body() : nullptr);
       }
       RegExpTree* ascii_capture =
           RebuildCaptureChain(captured_term, ascii_choice, zone);
