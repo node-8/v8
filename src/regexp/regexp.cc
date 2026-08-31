@@ -746,8 +746,9 @@ RegExpTree* GetOuterCapturedPositiveClassQuantifierTailTree(RegExpTree* tree,
   }
   static constexpr int kMaxAsciiTailRepetition = 8;
   if ((!quantifier->is_greedy() && !quantifier->is_non_greedy()) ||
-      quantifier->max() == RegExpTree::kInfinity ||
-      quantifier->max() > kMaxAsciiTailRepetition ||
+      (quantifier->max() == RegExpTree::kInfinity && !is_body_or_mixed) ||
+      (quantifier->max() != RegExpTree::kInfinity &&
+       quantifier->max() > kMaxAsciiTailRepetition) ||
       (quantifier->min() == quantifier->max() && quantifier->min() < 2)) {
     return nullptr;
   }
@@ -788,7 +789,8 @@ RegExpTree* GetOuterCapturedPositiveClassQuantifierTailTree(RegExpTree* tree,
     scalar_nodes->Add(tail, zone);
     RegExpTree* scalar_fallback = zone->New<RegExpAlternative>(scalar_nodes);
 
-    if (GetPositiveAsciiClassTree(class_tree, zone) == nullptr) {
+    if (quantifier->max() == RegExpTree::kInfinity ||
+        GetPositiveAsciiClassTree(class_tree, zone) == nullptr) {
       suffix = scalar_fallback;
     } else {
       RegExpTree* ascii_choice;
