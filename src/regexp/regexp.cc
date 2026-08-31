@@ -643,13 +643,17 @@ RegExpTree* GetExactAsciiClassRepetition(RegExpTree* class_tree, int repetition,
 
 RegExpTree* GetExactScalarClassRepetition(RegExpTree* class_tree,
                                           int repetition, RegExpFlags flags,
-                                          Zone* zone) {
+                                          Zone* zone,
+                                          RegExpTree* capture_tree = nullptr) {
   ZoneList<RegExpTree*>* nodes =
       zone->New<ZoneList<RegExpTree*>>(repetition, zone);
   for (int i = 0; i < repetition; ++i) {
     RegExpTree* scalar_class =
         GetPositiveScalarDispatchClassTree(class_tree, flags, zone);
     if (scalar_class == nullptr) return nullptr;
+    if (capture_tree != nullptr) {
+      scalar_class = RebuildCaptureChain(capture_tree, scalar_class, zone);
+    }
     nodes->Add(scalar_class, zone);
   }
   return zone->New<RegExpAlternative>(nodes);
@@ -719,25 +723,35 @@ RegExpTree* GetOuterCapturedPositiveClassQuantifierTailTree(RegExpTree* tree,
   int outer_capture_count = 0;
   RegExpTree* quantifier_tree =
       UnwrapCaptureChain(captured_term, &outer_capture_count);
-  if (outer_capture_count == 0 || outer_capture_count != capture_count ||
-      !quantifier_tree->IsQuantifier()) {
+  if (!quantifier_tree->IsQuantifier()) return nullptr;
+  RegExpQuantifier* quantifier = quantifier_tree->AsQuantifier();
+  int body_capture_count = 0;
+  RegExpTree* class_tree =
+      UnwrapCaptureChain(quantifier->body(), &body_capture_count);
+  const bool is_pure_outer = outer_capture_count > 0 &&
+                             outer_capture_count == capture_count &&
+                             body_capture_count == 0;
+  const bool is_body_or_mixed_exact =
+      quantifier->min() == quantifier->max() && body_capture_count > 0 &&
+      outer_capture_count + body_capture_count == capture_count;
+  if ((!is_pure_outer && !is_body_or_mixed_exact) ||
+      !class_tree->IsClassRanges()) {
     return nullptr;
   }
-  RegExpQuantifier* quantifier = quantifier_tree->AsQuantifier();
   static constexpr int kMaxAsciiTailRepetition = 8;
   if ((!quantifier->is_greedy() && !quantifier->is_non_greedy()) ||
       quantifier->max() == RegExpTree::kInfinity ||
       quantifier->max() > kMaxAsciiTailRepetition ||
-      (quantifier->min() == quantifier->max() && quantifier->min() < 2) ||
-      !quantifier->body()->IsClassRanges()) {
+      (quantifier->min() == quantifier->max() && quantifier->min() < 2)) {
     return nullptr;
   }
 
-  RegExpTree* class_tree = quantifier->body();
   RegExpTree* suffix;
-  if (quantifier->min() == quantifier->max() && capture_count > 1) {
+  if (quantifier->min() == quantifier->max() &&
+      (capture_count > 1 || body_capture_count > 0)) {
     RegExpTree* scalar_choice = GetExactScalarClassRepetition(
-        class_tree, quantifier->min(), flags, zone);
+        class_tree, quantifier->min(), flags, zone,
+        body_capture_count > 0 ? quantifier->body() : nullptr);
     if (scalar_choice == nullptr) return nullptr;
     RegExpTree* scalar_capture =
         RebuildCaptureChain(captured_term, scalar_choice, zone);
