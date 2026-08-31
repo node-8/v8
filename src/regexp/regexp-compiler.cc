@@ -2533,7 +2533,10 @@ EmitResult Wtf8ScalarNode::Emit(RegExpCompiler* compiler, Trace* trace) {
     RETURN_IF_ERROR(on_success()->Emit(compiler, &successor_trace));
 
     assembler->Bind(&non_ascii);
-    return positive_non_ascii_node_->Emit(compiler, trace);
+    Trace non_ascii_trace(*trace);
+    // A variable-width scalar must not reach the one-byte special-loop edge.
+    non_ascii_trace.set_special_loop_state(nullptr);
+    return positive_non_ascii_node_->Emit(compiler, &non_ascii_trace);
   }
   if (is_slow_node_ && !trace->is_trivial()) {
     return trace->Flush(compiler, this);

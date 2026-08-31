@@ -537,6 +537,10 @@ class Wtf8ScalarNode : public SeqRegExpNode {
   void Accept(NodeVisitor* visitor) override;
   V8_WARN_UNUSED_RESULT EmitResult Emit(RegExpCompiler* compiler,
                                         Trace* trace) override;
+  int FixedLengthLoopLength() override {
+    // The positive node leaves the special loop before its variable-width edge.
+    return is_positive_class_ ? 1 : kNodeIsTooComplexForFixedLengthLoops;
+  }
   void GetQuickCheckDetails(QuickCheckDetails*, RegExpCompiler*, int, bool,
                             int) override {}
   void FillInBMInfo(Isolate*, int offset, int, BoyerMooreLookahead* bm,

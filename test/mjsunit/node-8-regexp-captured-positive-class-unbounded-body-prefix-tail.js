@@ -231,7 +231,8 @@ assertEquals([[0, 6], [0, 4], [2, 4]], Array.from(exact.indices));
 const complete = /(([A-C\u00e9-\u00eb])+)/du.exec(eAcute + eCircumflex);
 assertEquals([[0, 4], [0, 4], [2, 4]], Array.from(complete.indices));
 
-// Pure outer unbounded prefix-tail patterns remain outside this selector.
+// Pure outer unbounded prefix-tail patterns use the fixed-loop scalar path.
 const pureOuter =
     /(([A-C\u00e9-\u00eb]+))xy/du.exec(eAcute + eCircumflex + 'xy');
-assertNull(pureOuter);
+assertNotNull(pureOuter);
+assertEquals([[0, 6], [0, 4], [0, 4]], Array.from(pureOuter.indices));

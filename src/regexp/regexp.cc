@@ -744,9 +744,12 @@ RegExpTree* GetOuterCapturedPositiveClassQuantifierTailTree(RegExpTree* tree,
   if ((!is_pure_outer && !is_body_or_mixed) || !class_tree->IsClassRanges()) {
     return nullptr;
   }
+  const bool is_pure_outer_unbounded =
+      is_pure_outer && quantifier->max() == RegExpTree::kInfinity;
   static constexpr int kMaxAsciiTailRepetition = 8;
   if ((!quantifier->is_greedy() && !quantifier->is_non_greedy()) ||
-      (quantifier->max() == RegExpTree::kInfinity && !is_body_or_mixed) ||
+      (quantifier->max() == RegExpTree::kInfinity && !is_body_or_mixed &&
+       !is_pure_outer_unbounded) ||
       (quantifier->max() != RegExpTree::kInfinity &&
        quantifier->max() > kMaxAsciiTailRepetition) ||
       (quantifier->min() == quantifier->max() && quantifier->min() < 2)) {
