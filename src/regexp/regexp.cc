@@ -707,10 +707,9 @@ bool IsAsciiAtomWithinLength(RegExpTree* tree, int maximum_length) {
   return true;
 }
 
-RegExpTree* GetOuterCapturedPositiveClassQuantifierTailTree(RegExpTree* tree,
-                                                            int capture_count,
-                                                            RegExpFlags flags,
-                                                            Zone* zone) {
+RegExpTree* GetOuterCapturedPositiveClassQuantifierTailTree(
+    RegExpTree* tree, int capture_count, RegExpFlags flags, Zone* zone,
+    bool outer_start = false, bool allow_assertions = true) {
   if (!tree->IsAlternative()) return nullptr;
   ZoneList<RegExpTree*>* nodes = tree->AsAlternative()->nodes();
   static constexpr int kMaxExistingAsciiAtomLength = 8;
@@ -719,7 +718,7 @@ RegExpTree* GetOuterCapturedPositiveClassQuantifierTailTree(RegExpTree* tree,
   int core_end_index = nodes->length();
   RegExpAssertion* start_assertion = nullptr;
   RegExpAssertion* end_assertion = nullptr;
-  if (nodes->at(first_core_index)->IsAssertion() &&
+  if (allow_assertions && nodes->at(first_core_index)->IsAssertion() &&
       nodes->at(first_core_index)->AsAssertion()->assertion_type() ==
           RegExpAssertion::Type::START_OF_INPUT) {
     start_assertion = nodes->at(first_core_index++)->AsAssertion();
@@ -773,7 +772,7 @@ RegExpTree* GetOuterCapturedPositiveClassQuantifierTailTree(RegExpTree* tree,
   if (has_medium_ascii_atom && !is_body_or_mixed) return nullptr;
   const bool is_pure_outer_unbounded =
       is_pure_outer && quantifier->max() == RegExpTree::kInfinity;
-  if (start_assertion != nullptr && outer_capture_count > 0 &&
+  if ((start_assertion != nullptr || outer_start) && outer_capture_count > 0 &&
       quantifier->max() == RegExpTree::kInfinity) {
     return nullptr;
   }
@@ -880,6 +879,80 @@ RegExpTree* GetOuterCapturedPositiveClassQuantifierTailTree(RegExpTree* tree,
   anchored_nodes->Add(result, zone);
   if (end_assertion != nullptr) anchored_nodes->Add(end_assertion, zone);
   return zone->New<RegExpAlternative>(anchored_nodes);
+}
+
+RegExpTree* GetTopLevelDisjunctionCapturedPositiveClassQuantifierTailTree(
+    RegExpTree* tree, int capture_count, RegExpFlags flags, Zone* zone) {
+  RegExpGroup* group = nullptr;
+  if (tree->IsGroup()) {
+    group = tree->AsGroup();
+    if (group->flags() != flags) return nullptr;
+    tree = group->body();
+  }
+  RegExpDisjunction* disjunction = nullptr;
+  RegExpAssertion* start_assertion = nullptr;
+  RegExpAssertion* end_assertion = nullptr;
+  if (tree->IsDisjunction()) {
+    disjunction = tree->AsDisjunction();
+  } else if (tree->IsAlternative()) {
+    ZoneList<RegExpTree*>* nodes = tree->AsAlternative()->nodes();
+    if ((nodes->length() != 2 && nodes->length() != 3) ||
+        !nodes->first()->IsAssertion() ||
+        nodes->first()->AsAssertion()->assertion_type() !=
+            RegExpAssertion::Type::START_OF_INPUT) {
+      return nullptr;
+    }
+    start_assertion = nodes->first()->AsAssertion();
+    RegExpTree* middle = nodes->at(1);
+    if (middle->IsGroup() && middle->AsGroup()->body()->IsDisjunction()) {
+      group = middle->AsGroup();
+      if (group->flags() != flags) return nullptr;
+      disjunction = group->body()->AsDisjunction();
+    } else if (middle->IsDisjunction()) {
+      disjunction = middle->AsDisjunction();
+    } else {
+      return nullptr;
+    }
+    if (nodes->length() == 3) {
+      if (!nodes->at(2)->IsAssertion() ||
+          nodes->at(2)->AsAssertion()->assertion_type() !=
+              RegExpAssertion::Type::END_OF_INPUT) {
+        return nullptr;
+      }
+      end_assertion = nodes->at(2)->AsAssertion();
+    }
+  } else {
+    return nullptr;
+  }
+
+  ZoneList<RegExpTree*>* alternatives = zone->New<ZoneList<RegExpTree*>>(
+      disjunction->alternatives()->length(), zone);
+  bool changed = false;
+  for (RegExpTree* branch : *disjunction->alternatives()) {
+    RegExpTree* replacement = GetOuterCapturedPositiveClassQuantifierTailTree(
+        branch, capture_count, flags, zone, start_assertion != nullptr, false);
+    if (replacement == nullptr) {
+      alternatives->Add(branch, zone);
+    } else {
+      alternatives->Add(replacement, zone);
+      changed = true;
+    }
+  }
+  if (!changed) return nullptr;
+
+  RegExpTree* result = zone->New<RegExpDisjunction>(alternatives);
+  if (group != nullptr) {
+    result = zone->New<RegExpGroup>(result, group->flags());
+  }
+  if (start_assertion != nullptr) {
+    ZoneList<RegExpTree*>* anchored_nodes =
+        zone->New<ZoneList<RegExpTree*>>(2 + (end_assertion != nullptr), zone);
+    anchored_nodes->Add(start_assertion, zone);
+    anchored_nodes->Add(result, zone);
+    if (end_assertion != nullptr) anchored_nodes->Add(end_assertion, zone);
+    result = zone->New<RegExpAlternative>(anchored_nodes);
+  }
+  return result;
 }
 
 RegExpTree* GetCaptureWrappedClass(RegExpTree* tree, int capture_count) {
@@ -2154,6 +2227,11 @@ bool RegExpImpl::CompileIrregexpFromSource(
       if (byte_tree == nullptr) {
         byte_tree = GetOuterCapturedPositiveClassQuantifierTailTree(
             compile_data.tree, compile_data.capture_count, flags, &zone);
+      }
+      if (byte_tree == nullptr) {
+        byte_tree =
+            GetTopLevelDisjunctionCapturedPositiveClassQuantifierTailTree(
+                compile_data.tree, compile_data.capture_count, flags, &zone);
       }
     }
     if (byte_tree != nullptr) {
