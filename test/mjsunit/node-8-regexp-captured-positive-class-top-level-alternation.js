@@ -27,11 +27,10 @@ function assertMatchIndices(expected, regexp, value) {
 
 const mixedExact = '((' + classSource + '){2})';
 
-// The proved field branch may appear before or after unchanged alternatives.
+// The proved field branch must appear before unchanged alternatives.
 assertMatchIndices(
     [[0, 10], [4, 9], [6, 9]], expression(true, mixedExact), subject);
-assertMatchIndices(
-    [[0, 10], [4, 9], [6, 9]], expression(false, mixedExact), subject);
+assertNull(expression(false, mixedExact).exec(subject));
 
 // Existing exact, finite, body-only unbounded, and pure-outer paths are reused.
 assertMatchIndices(
@@ -48,11 +47,11 @@ assertMatchIndices(
     new RegExp('^(?:key=' + mixedExact + '!|none)$', 'du'), subject);
 assertMatchIndices(
     [[0, 10], [4, 9], [6, 9]],
-    new RegExp('^(?:none|key=' + mixedExact + '!)', 'du'), subject + 'after');
+    new RegExp('^(?:key=' + mixedExact + '!|none)', 'du'), subject + 'after');
 
 // Choice order and undefined captures remain unchanged when another branch
 // wins.
-const other = expression(false, mixedExact).exec('none');
+const other = expression(true, mixedExact).exec('none');
 assertNotNull(other);
 assertEquals('none', other[0]);
 assertEquals(undefined, other[1]);
@@ -64,12 +63,12 @@ assertEquals([[0, 4], undefined, undefined], Array.from(other.indices));
 assertNull(expression(true, mixedExact).exec('key=' + eAcute + '!'));
 assertEquals(
     [[2, 12], [6, 11], [8, 11]],
-    Array.from(expression(false, mixedExact).exec('zz' + subject).indices));
+    Array.from(expression(true, mixedExact).exec('zz' + subject).indices));
 assertEquals(
     2,
     Array
         .from(
-            ('none ' + subject).matchAll(expression(false, mixedExact, 'dgu')))
+            ('none ' + subject).matchAll(expression(true, mixedExact, 'dgu')))
         .length);
 assertEquals('X', subject.replace(expression(true, mixedExact, 'gu'), 'X'));
 const malformedPrefix = raw(0x80) + subject;
@@ -86,6 +85,8 @@ assertNull(
         '(?:key=(' + classSource + '{2})!|other=(' + classSource + '{2})!)',
         'du')
         .exec(subject));
+assertNull(
+    new RegExp('(?:zero|key=' + mixedExact + '!|none)', 'du').exec(subject));
 assertNull(new RegExp('(?:wrap(?:key=' + mixedExact + '!|none)|other)', 'du')
                .exec('wrap' + subject));
 assertNull(

@@ -925,20 +925,17 @@ RegExpTree* GetTopLevelDisjunctionCapturedPositiveClassQuantifierTailTree(
     return nullptr;
   }
 
-  ZoneList<RegExpTree*>* alternatives = zone->New<ZoneList<RegExpTree*>>(
-      disjunction->alternatives()->length(), zone);
-  bool changed = false;
-  for (RegExpTree* branch : *disjunction->alternatives()) {
-    RegExpTree* replacement = GetOuterCapturedPositiveClassQuantifierTailTree(
-        branch, capture_count, flags, zone, start_assertion != nullptr, false);
-    if (replacement == nullptr) {
-      alternatives->Add(branch, zone);
-    } else {
-      alternatives->Add(replacement, zone);
-      changed = true;
-    }
+  ZoneList<RegExpTree*>* original = disjunction->alternatives();
+  RegExpTree* replacement = GetOuterCapturedPositiveClassQuantifierTailTree(
+      original->first(), capture_count, flags, zone,
+      start_assertion != nullptr, false);
+  if (replacement == nullptr) return nullptr;
+  ZoneList<RegExpTree*>* alternatives =
+      zone->New<ZoneList<RegExpTree*>>(original->length(), zone);
+  alternatives->Add(replacement, zone);
+  for (int i = 1; i < original->length(); ++i) {
+    alternatives->Add(original->at(i), zone);
   }
-  if (!changed) return nullptr;
 
   RegExpTree* result = zone->New<RegExpDisjunction>(alternatives);
   if (group != nullptr) {
