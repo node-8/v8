@@ -715,15 +715,32 @@ RegExpTree* GetOuterCapturedPositiveClassQuantifierTailTree(RegExpTree* tree,
   ZoneList<RegExpTree*>* nodes = tree->AsAlternative()->nodes();
   static constexpr int kMaxExistingAsciiAtomLength = 8;
   static constexpr int kMaxBodyAsciiAtomLength = 32;
-  int captured_term_index = 0;
+  int first_core_index = 0;
+  int core_end_index = nodes->length();
+  RegExpAssertion* start_assertion = nullptr;
+  RegExpAssertion* end_assertion = nullptr;
+  if (nodes->at(first_core_index)->IsAssertion() &&
+      nodes->at(first_core_index)->AsAssertion()->assertion_type() ==
+          RegExpAssertion::Type::START_OF_INPUT) {
+    start_assertion = nodes->at(first_core_index++)->AsAssertion();
+  }
+  if (start_assertion != nullptr && first_core_index < core_end_index &&
+      nodes->at(core_end_index - 1)->IsAssertion() &&
+      nodes->at(core_end_index - 1)->AsAssertion()->assertion_type() ==
+          RegExpAssertion::Type::END_OF_INPUT) {
+    end_assertion = nodes->at(--core_end_index)->AsAssertion();
+  }
+  const int core_length = core_end_index - first_core_index;
+  int captured_term_index = first_core_index;
   RegExpAtom* prefix = nullptr;
-  if (nodes->length() == 3) {
-    if (!IsAsciiAtomWithinLength(nodes->at(0), kMaxBodyAsciiAtomLength)) {
+  if (core_length == 3) {
+    if (!IsAsciiAtomWithinLength(nodes->at(first_core_index),
+                                 kMaxBodyAsciiAtomLength)) {
       return nullptr;
     }
-    prefix = nodes->at(0)->AsAtom();
-    captured_term_index = 1;
-  } else if (nodes->length() != 2) {
+    prefix = nodes->at(first_core_index)->AsAtom();
+    captured_term_index++;
+  } else if (core_length != 2) {
     return nullptr;
   }
   if (!IsAsciiAtomWithinLength(nodes->at(captured_term_index + 1),
@@ -756,13 +773,16 @@ RegExpTree* GetOuterCapturedPositiveClassQuantifierTailTree(RegExpTree* tree,
   if (has_medium_ascii_atom && !is_body_or_mixed) return nullptr;
   const bool is_pure_outer_unbounded =
       is_pure_outer && quantifier->max() == RegExpTree::kInfinity;
+  if (start_assertion != nullptr && outer_capture_count > 0 &&
+      quantifier->max() == RegExpTree::kInfinity) {
+    return nullptr;
+  }
   static constexpr int kMaxAsciiTailRepetition = 8;
   if ((!quantifier->is_greedy() && !quantifier->is_non_greedy()) ||
       (quantifier->max() == RegExpTree::kInfinity && !is_body_or_mixed &&
        !is_pure_outer_unbounded) ||
       (quantifier->max() != RegExpTree::kInfinity &&
-       quantifier->max() > kMaxAsciiTailRepetition &&
-       !is_body_or_mixed) ||
+       quantifier->max() > kMaxAsciiTailRepetition && !is_body_or_mixed) ||
       (quantifier->min() == quantifier->max() && quantifier->min() < 2)) {
     return nullptr;
   }
@@ -845,12 +865,21 @@ RegExpTree* GetOuterCapturedPositiveClassQuantifierTailTree(RegExpTree* tree,
       suffix = zone->New<RegExpDisjunction>(alternatives);
     }
   }
-  if (prefix == nullptr) return suffix;
-  ZoneList<RegExpTree*>* prefixed_nodes =
-      zone->New<ZoneList<RegExpTree*>>(2, zone);
-  prefixed_nodes->Add(prefix, zone);
-  prefixed_nodes->Add(suffix, zone);
-  return zone->New<RegExpAlternative>(prefixed_nodes);
+  RegExpTree* result = suffix;
+  if (prefix != nullptr) {
+    ZoneList<RegExpTree*>* prefixed_nodes =
+        zone->New<ZoneList<RegExpTree*>>(2, zone);
+    prefixed_nodes->Add(prefix, zone);
+    prefixed_nodes->Add(result, zone);
+    result = zone->New<RegExpAlternative>(prefixed_nodes);
+  }
+  if (start_assertion == nullptr && end_assertion == nullptr) return result;
+  ZoneList<RegExpTree*>* anchored_nodes = zone->New<ZoneList<RegExpTree*>>(
+      1 + (start_assertion != nullptr) + (end_assertion != nullptr), zone);
+  if (start_assertion != nullptr) anchored_nodes->Add(start_assertion, zone);
+  anchored_nodes->Add(result, zone);
+  if (end_assertion != nullptr) anchored_nodes->Add(end_assertion, zone);
+  return zone->New<RegExpAlternative>(anchored_nodes);
 }
 
 RegExpTree* GetCaptureWrappedClass(RegExpTree* tree, int capture_count) {
