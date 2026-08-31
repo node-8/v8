@@ -761,7 +761,8 @@ RegExpTree* GetOuterCapturedPositiveClassQuantifierTailTree(RegExpTree* tree,
       (quantifier->max() == RegExpTree::kInfinity && !is_body_or_mixed &&
        !is_pure_outer_unbounded) ||
       (quantifier->max() != RegExpTree::kInfinity &&
-       quantifier->max() > kMaxAsciiTailRepetition) ||
+       quantifier->max() > kMaxAsciiTailRepetition &&
+       (!is_body_or_mixed || quantifier->min() == quantifier->max())) ||
       (quantifier->min() == quantifier->max() && quantifier->min() < 2)) {
     return nullptr;
   }
@@ -803,6 +804,7 @@ RegExpTree* GetOuterCapturedPositiveClassQuantifierTailTree(RegExpTree* tree,
     RegExpTree* scalar_fallback = zone->New<RegExpAlternative>(scalar_nodes);
 
     if (quantifier->max() == RegExpTree::kInfinity ||
+        quantifier->max() > kMaxAsciiTailRepetition ||
         GetPositiveAsciiClassTree(class_tree, zone) == nullptr) {
       suffix = scalar_fallback;
     } else {

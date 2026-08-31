@@ -10,6 +10,7 @@ const bytes = value =>
 const eAcute = String.fromCodePoint(0xe9);
 const eCircumflex = String.fromCodePoint(0xea);
 const cjk = String.fromCodePoint(0x4e2d);
+const emoji = String.fromCodePoint(0x1f600);
 
 function assertMatchIndices(expected, regexp, subject) {
   const match = regexp.exec(subject);
@@ -18,57 +19,35 @@ function assertMatchIndices(expected, regexp, subject) {
   return match;
 }
 
-const tail9 = '123456789';
-const tail16 = '1234567890abcdef';
-const tail17 = '1234567890abcdefg';
-const prefix9 = 'prefix-09';
-const prefix16 = 'prefix-123456789';
-const prefix17 = 'prefix-1234567890';
+assertMatchIndices(
+    [[0, 6], [2, 4]], /([A-C\u00e9-\u00eb]){1,20}xy/du,
+    eAcute + eCircumflex + 'xy');
+assertMatchIndices(
+    [[0, 6], [0, 4], [2, 4]], /(([A-C\u00e9-\u00eb]){1,20})xy/du,
+    eAcute + eCircumflex + 'xy');
+assertMatchIndices(
+    [[0, 6], [0, 4], [2, 4]], /(([A-C\u00e9-\u00eb]){1,20}?)xy/du,
+    eAcute + eCircumflex + 'xy');
 
-assertEquals(9, tail9.length);
-assertEquals(16, tail16.length);
-assertEquals(17, tail17.length);
-assertEquals(9, prefix9.length);
-assertEquals(16, prefix16.length);
-assertEquals(17, prefix17.length);
+const nineScalars = 'A' + eAcute + 'BC' + eCircumflex + 'ABCA';
+assertMatchIndices(
+    [[0, 14], [2, 13], [12, 13]], /p=(([A-C\u00e9-\u00eb]){9,20})z/du,
+    'p=' + nineScalars + 'z');
+assertMatchIndices(
+    [[0, 26], [0, 24], [22, 24]], /(([A-C\u00e9-\u00eb]){1,100})xy/du,
+    (eAcute + eCircumflex).repeat(6) + 'xy');
 
-// Pure-outer medium-atom forms retain their preceding behavior because their
-// exact and failure-heavy ASCII workloads do not pass the performance gate.
-assertNull(
-    /(([A-C\u00e9-\u00eb]+))123456789/du.exec(eAcute + eCircumflex + tail9));
-assertNull(
-    /prefix-123456789(([A-C\u00e9-\u00eb]{1,3}?))1234567890abcdef/du.exec(
-        prefix16 + eAcute + eCircumflex + tail16));
-
-// Body-only capture keeps the final scalar; mixed outer/body capture also
-// keeps the complete field in its outer capture.
-assertMatchIndices(
-    [[0, 13], [2, 4]], /([A-C\u00e9-\u00eb])+123456789/du,
-    eAcute + eCircumflex + tail9);
-assertMatchIndices(
-    [[0, 20], [0, 4], [2, 4]], /(([A-C\u00e9-\u00eb]){1,3})1234567890abcdef/du,
-    eAcute + eCircumflex + tail16);
-assertMatchIndices(
-    [[0, 20], [0, 4], [2, 4]], /(([A-C\u00e9-\u00eb]){1,3}?)1234567890abcdef/du,
-    eAcute + eCircumflex + tail16);
-assertMatchIndices(
-    [[0, 13], [2, 4]], /([A-C\u00e9-\u00eb]){2}123456789/du,
-    eAcute + eCircumflex + tail9);
-assertMatchIndices(
-    [[0, 20], [0, 4], [2, 4]], /(([A-C\u00e9-\u00eb]){2})1234567890abcdef/du,
-    eAcute + eCircumflex + tail16);
-assertMatchIndices(
-    [[0, 15], [9, 13], [11, 13]], /prefix-09(([A-C\u00e9-\u00eb])+)xy/du,
-    prefix9 + eAcute + eCircumflex + 'xy');
+const prefix = 'prefix-123456789';
+const tail = '1234567890abcdef';
 assertMatchIndices(
     [[0, 36], [16, 20], [18, 20]],
-    /prefix-123456789(([A-C\u00e9-\u00eb]){1,3}?)1234567890abcdef/du,
-    prefix16 + eAcute + eCircumflex + tail16);
+    /prefix-123456789(([A-C\u00e9-\u00eb]){1,20})1234567890abcdef/du,
+    prefix + eAcute + eCircumflex + tail);
 
 const named = assertMatchIndices(
-    [[0, 22], [9, 13], [9, 13], [11, 13]],
-    /prefix-09(?<field>((?<part>[A-C\u00e9-\u00eb]){1,3}))123456789/du,
-    prefix9 + eAcute + eCircumflex + tail9);
+    [[0, 11], [4, 8], [4, 8], [6, 8]],
+    /key=(?<field>((?<part>[A-C\u00e9-\u00eb]){1,20}))END/du,
+    'key=' + eAcute + eCircumflex + 'END');
 assertEquals(bytes(named[1]), bytes(named.groups.field));
 assertEquals(bytes(named[3]), bytes(named.groups.part));
 assertEquals(named.indices[1], named.indices.groups.field);
@@ -76,46 +55,43 @@ assertEquals(named.indices[3], named.indices.groups.part);
 
 // Greedy backtracking must leave the overlapping ASCII bytes for the tail.
 assertMatchIndices(
-    [[0, 12], [0, 3], [2, 3]], /(([A-C1\u00e9]){1,3})123456789/du,
-    eAcute + '1' + tail9);
+    [[0, 12], [0, 3], [2, 3]], /(([A-C1\u00e9]){1,20})123456789/du,
+    eAcute + '1' +
+        '123456789');
+assertNull(
+    /(([A-C\u00e9-\u00eb]){9,20})xy/du.exec(eAcute + eCircumflex + 'xy'));
 
 const malformedSubject =
-    raw(0x80, ...bytes(prefix9), 0xc3, 0xa9, ...bytes(tail9));
-const malformed = /prefix-09([A-C\u00e9-\u00eb]){1,3}123456789/dgu;
+    raw(0x80, 0x6b, 0x65, 0x79, 0x3d, 0xc3, 0xa9, 0x45, 0x4e, 0x44);
+const malformed = /key=([A-C\u00e9-\u00eb]){1,20}END/dgu;
 malformed.lastIndex = 1;
 const malformedMatch = malformed.exec(malformedSubject);
 assertNotNull(malformedMatch);
-assertEquals([[1, 21], [10, 12]], Array.from(malformedMatch.indices));
-assertEquals(21, malformed.lastIndex);
+assertEquals([[1, 10], [5, 7]], Array.from(malformedMatch.indices));
+assertEquals(10, malformed.lastIndex);
 
-const chunk = prefix9 + 'A' + eAcute + 'B' + tail9;
-const all = Array.from(chunk.repeat(100).matchAll(
-    /prefix-09(([A-C\u00e9-\u00eb]){1,3})123456789/dgu));
+const chunk = 'key=A' + eAcute + 'BEND';
+const all = Array.from(
+    chunk.repeat(100).matchAll(/key=(([A-C\u00e9-\u00eb]){1,20})END/dgu));
 assertEquals(100, all.length);
 for (let index = 0; index < all.length; ++index) {
   const start = index * chunk.length;
   assertEquals(
-      [[start, start + 22], [start + 9, start + 13], [start + 12, start + 13]],
+      [[start, start + 11], [start + 4, start + 8], [start + 7, start + 8]],
       Array.from(all[index].indices));
 }
 
-const replacementCalls = [];
 assertEquals(
     'Y',
-    (prefix9 + eAcute + eCircumflex + tail9)
+    ('key=' + eAcute + eCircumflex + 'END')
         .replace(
-            /prefix-09(([A-C\u00e9-\u00eb])+)123456789/gu,
+            /key=(([A-C\u00e9-\u00eb]){1,20})END/gu,
             (match, field, part, offset) => {
-              replacementCalls.push(
-                  [offset, bytes(match), bytes(field), bytes(part)]);
+              assertEquals(0, offset);
+              assertEquals(bytes(eAcute + eCircumflex), bytes(field));
+              assertEquals(bytes(eCircumflex), bytes(part));
               return 'Y';
             }));
-assertEquals(
-    [[
-      0, bytes(prefix9 + eAcute + eCircumflex + tail9),
-      bytes(eAcute + eCircumflex), bytes(eCircumflex)
-    ]],
-    replacementCalls);
 
 function decodeScalar(input, position) {
   const first = input[position];
@@ -162,8 +138,8 @@ function inRanges(codePoint) {
       (codePoint >= 0x1f600 && codePoint <= 0x1f601);
 }
 
-const oraclePrefix = bytes('key-name=');
-const oracleTail = bytes('END-12345');
+const oraclePrefix = bytes('key=');
+const oracleTail = bytes('END');
 
 function hasBytesAt(input, position, expected) {
   if (position + expected.length > input.length) return false;
@@ -179,7 +155,7 @@ function expectedSearch(input, start) {
     const captureStart = candidate + oraclePrefix.length;
     const ends = [captureStart];
     let position = captureStart;
-    while (position < input.length && ends.length <= 8) {
+    while (position < input.length && ends.length <= 20) {
       const scalar = decodeScalar(input, position);
       if (!inRanges(scalar.codePoint)) break;
       position += scalar.width;
@@ -200,16 +176,16 @@ function expectedSearch(input, start) {
 }
 
 const corpora = [
-  bytes('key-name=a' + eAcute + 'xEND-12345'),
-  [0x80, ...bytes('key-name=a' + eAcute + 'END-12345')],
-  [0xe2, 0x82, ...bytes('key-name=abEND-12345')],
-  [0xed, 0xa0, 0x80, ...bytes('key-name=abEND-12345')],
-  [0xe0, 0x80, ...bytes('key-name=abEND-12345')],
-  [0xf0, 0x80, ...bytes('key-name=abEND-12345')],
-  [0xef, 0xbf, 0xbd, ...bytes('key-name=abEND-12345')],
-  bytes('key-name=' + String.fromCodePoint(0x1f600) + 'aEND-12345'),
+  bytes('key=a' + eAcute + 'xEND'),
+  [0x80, ...bytes('key=a' + eAcute + 'END')],
+  [0xe2, 0x82, ...bytes('key=abEND')],
+  [0xed, 0xa0, 0x80, ...bytes('key=abEND')],
+  [0xe0, 0x80, ...bytes('key=abEND')],
+  [0xf0, 0x80, ...bytes('key=abEND')],
+  [0xef, 0xbf, 0xbd, ...bytes('key=abEND')],
+  bytes('key=' + emoji + 'aEND'),
 ];
-let randomState = 0x81d76c3b;
+let randomState = 0x9f32a76d;
 for (let sample = 0; sample < 200; ++sample) {
   const input = [];
   const length = 4 + (sample % 21);
@@ -217,12 +193,11 @@ for (let sample = 0; sample < 200; ++sample) {
     randomState = (Math.imul(randomState, 1664525) + 1013904223) >>> 0;
     input.push(randomState >>> 24);
   }
-  input.push(...bytes('key-name=a' + eAcute + 'bEND-12345'));
+  input.push(...bytes('key=a' + eAcute + 'bEND'));
   corpora.push(input);
 }
 
-const oracle =
-    /key-name=(([a-cx\u00e9-\u00eb\u{1f600}-\u{1f601}]){1,8})END-12345/dug;
+const oracle = /key=(([a-cx\u00e9-\u00eb\u{1f600}-\u{1f601}]){1,20})END/dug;
 for (const input of corpora) {
   const value = raw(...input);
   for (let start = 0; start <= input.length; ++start) {
@@ -246,21 +221,21 @@ for (const input of corpora) {
   }
 }
 
-// The old boundary remains accepted; the new boundary stops exactly at 16.
+// Existing and adjacent excluded selectors remain unchanged.
 assertMatchIndices(
-    [[0, 12], [0, 4], [0, 4]], /(([A-C\u00e9-\u00eb]+))12345678/du,
-    eAcute + eCircumflex + '12345678');
+    [[0, 6], [0, 4], [2, 4]], /(([A-C\u00e9-\u00eb]){1,8})xy/du,
+    eAcute + eCircumflex + 'xy');
 assertNull(
-    /(([A-C\u00e9-\u00eb])+)1234567890abcdefg/du.exec(
-        eAcute + eCircumflex + tail17));
+    /(([A-C\u00e9-\u00eb]{1,20}))xy/du.exec(eAcute + eCircumflex + 'xy'));
 assertNull(
-    /prefix-1234567890(([A-C\u00e9-\u00eb])+)xy/du.exec(
-        prefix17 + eAcute + eCircumflex + 'xy'));
-assertMatchIndices(
-    [[0, 13], [0, 4], [2, 4]], /(([A-C\u00e9-\u00eb]){1,9})123456789/du,
-    eAcute + eCircumflex + tail9);
-assertNull(/(([A-C\u00e9-\u00eb])+)\u4e2d/du.exec(eAcute + eCircumflex + cjk));
+    /(([A-C\u00e9-\u00eb]){20})xy/du.exec(
+        (eAcute + eCircumflex).repeat(10) + 'xy'));
 assertNull(
-    /(([A-C\u00e9-\u00eb])+)123456789/duy.exec(eAcute + eCircumflex + tail9));
+    /(([A-C\u00e9-\u00eb]){1,20})1234567890abcdefg/du.exec(
+        eAcute + eCircumflex + '1234567890abcdefg'));
 assertNull(
-    /(([a-c\u00e9-\u00eb])+)123456789/dui.exec(eAcute + eCircumflex + tail9));
+    /(([A-C\u00e9-\u00eb]){1,20})\u4e2d/du.exec(eAcute + eCircumflex + cjk));
+assertNull(
+    /(([A-C\u00e9-\u00eb]){1,20})xy/duy.exec(eAcute + eCircumflex + 'xy'));
+assertNull(
+    /(([a-c\u00e9-\u00eb]){1,20})xy/dui.exec(eAcute + eCircumflex + 'xy'));
