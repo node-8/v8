@@ -91,7 +91,9 @@ assertNull(new RegExp('(?:wrap(?:key=' + mixedExact + '!|none)|other)', 'du')
                .exec('wrap' + subject));
 assertNull(
     new RegExp('((?:key=' + mixedExact + '!|none))', 'du').exec(subject));
-assertNull(new RegExp('(?:^key=' + mixedExact + '!|none)', 'du').exec(subject));
+assertMatchIndices(
+    [[0, 10], [4, 9], [6, 9]],
+    new RegExp('(?:^key=' + mixedExact + '!|none)', 'du'), subject);
 assertNull(new RegExp('(?:key=' + mixedExact + '!$|none)', 'du').exec(subject));
 assertNull(
     new RegExp('^(?:key=((' + classSource + '+))!|none)$', 'du').exec(subject));

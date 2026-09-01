@@ -928,7 +928,7 @@ RegExpTree* GetTopLevelDisjunctionCapturedPositiveClassQuantifierTailTree(
   ZoneList<RegExpTree*>* original = disjunction->alternatives();
   RegExpTree* replacement = GetOuterCapturedPositiveClassQuantifierTailTree(
       original->first(), capture_count, flags, zone,
-      start_assertion != nullptr, false);
+      start_assertion != nullptr, true);
   if (replacement == nullptr) return nullptr;
   ZoneList<RegExpTree*>* alternatives =
       zone->New<ZoneList<RegExpTree*>>(original->length(), zone);
