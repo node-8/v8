@@ -850,6 +850,28 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
     state->used_extended_syntax = true;
     return true;
   }
+  if (tree->IsLookaround()) {
+    auto* lookaround = tree->AsLookaround();
+    if (lookaround->type() == RegExpLookaround::LOOKBEHIND) return false;
+    ZoneList<RegExpTree*> body(4, zone);
+    if (!AppendNode8CaseFoldedLiteral(lookaround->body(), flags, zone, &body,
+                                     state, depth + 1, in_quantifier_body) ||
+        body.is_empty()) {
+      return false;
+    }
+    RegExpTree* lowered = body.length() == 1
+                              ? body.first()
+                              : zone->New<RegExpAlternative>(
+                                    zone->New<ZoneList<RegExpTree*>>(body, zone));
+    output->Add(zone->New<RegExpLookaround>(
+                    lowered, lookaround->is_positive(),
+                    lookaround->capture_count(), lookaround->capture_from(),
+                    lookaround->type(), lookaround->index()),
+                zone);
+    state->classes.contains_lookaround = true;
+    state->used_extended_syntax = true;
+    return true;
+  }
   if (tree->IsGroup()) {
     auto* group = tree->AsGroup();
     // The parser already resolves dotAll ranges and multiline assertions.
@@ -1054,8 +1076,10 @@ RegExpTree* GetNode8ComposedLiteralByteTree(RegExpTree* tree, RegExpFlags flags,
           literals.is_empty()) {
         return nullptr;
       }
-      if (!folded.needs_byte_lowering) return tree;
       *state = folded.classes;
+      if (!folded.needs_byte_lowering && !folded.classes.contains_lookaround) {
+        return tree;
+      }
       // The child already folds scalars; do not restore i on encoded bytes.
       return literals.length() == 1
                  ? literals.first()
@@ -3184,21 +3208,25 @@ bool RegExpImpl::CompileIrregexpFromSource(
   if (v8_flags.utf8_string_semantics && is_one_byte && IsIgnoreCase(flags)) {
     ZoneList<RegExpTree*> literals(4, &zone);
     Node8CaseFoldState state;
-    if (AppendNode8CaseFoldedLiteral(original_tree, flags, &zone, &literals,
-                                     &state) &&
-        !literals.is_empty() && !compile_data.node8_pattern_has_malformed &&
+    const bool lowered = AppendNode8CaseFoldedLiteral(
+        original_tree, flags, &zone, &literals, &state);
+    const bool scalar_search =
+        state.classes.contains_decoder ||
+        ((state.classes.contains_lookaround ||
+          state.classes.contains_word_assertion) &&
+         original_tree->min_match() == 0);
+    if (lowered && !literals.is_empty() &&
+        !compile_data.node8_pattern_has_malformed &&
         // Preserve the original matching code for newly admitted ASCII-safe
         // compositions; existing pure-literal lowering remains unchanged.
-        (!state.used_extended_syntax || state.needs_byte_lowering)) {
+        (!state.used_extended_syntax || state.needs_byte_lowering ||
+         scalar_search)) {
       compile_data.tree = literals.length() == 1
                               ? literals.first()
                               : zone.New<RegExpAlternative>(
                                     zone.New<ZoneList<RegExpTree*>>(literals, &zone));
       // Do not retry an excluded scalar at one of its continuation bytes.
-      compile_data.node8_scalar_search =
-          state.classes.contains_decoder ||
-          (state.classes.contains_word_assertion &&
-           original_tree->min_match() == 0);
+      compile_data.node8_scalar_search = scalar_search;
       compile_data.node8_decoder_sensitive =
           state.classes.contains_decoder &&
           Node8CanStartOnContinuation(compile_data.tree, &zone);
