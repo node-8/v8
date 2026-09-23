@@ -627,9 +627,7 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
                                  ZoneList<RegExpTree*>* output,
                                  Node8CaseFoldState* state, int depth = 0,
                                  bool non_ascii_body = false) {
-  if (depth > 100 || (non_ascii_body && tree->min_match() == 0)) {
-    return false;
-  }
+  if (depth > 100) return false;
   auto append_code_point = [&](base::uc32 code_point,
                                ZoneList<RegExpTree*>* destination,
                                bool non_ascii_only = false) {
@@ -724,7 +722,7 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
       return false;
     }
     ZoneList<RegExpTree*> lowered_body(1, zone);
-    // Keep ASCII/mixed closures and zero-width body nodes unchanged.
+    // Keep ASCII/mixed closures unchanged; generic loops guard empty bodies.
     if (!AppendNode8CaseFoldedLiteral(quantifier->body(), flags, zone,
                                      &lowered_body, state, depth + 1, true) ||
         lowered_body.is_empty()) {
