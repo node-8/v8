@@ -852,7 +852,6 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
   }
   if (tree->IsLookaround()) {
     auto* lookaround = tree->AsLookaround();
-    if (lookaround->type() == RegExpLookaround::LOOKBEHIND) return false;
     ZoneList<RegExpTree*> body(4, zone);
     if (!AppendNode8CaseFoldedLiteral(lookaround->body(), flags, zone, &body,
                                      state, depth + 1, in_quantifier_body) ||
@@ -869,6 +868,8 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
                     lookaround->type(), lookaround->index()),
                 zone);
     state->classes.contains_lookaround = true;
+    state->classes.contains_lookbehind |=
+        lookaround->type() == RegExpLookaround::LOOKBEHIND;
     state->used_extended_syntax = true;
     return true;
   }
@@ -3217,6 +3218,9 @@ bool RegExpImpl::CompileIrregexpFromSource(
           state.classes.contains_word_assertion) &&
          original_tree->min_match() == 0);
     if (lowered && !literals.is_empty() &&
+        !(state.classes.contains_lookbehind &&
+          (state.classes.contains_decoder ||
+           state.classes.contains_forward_dispatch)) &&
         !compile_data.node8_pattern_has_malformed &&
         // Preserve the original matching code for newly admitted ASCII-safe
         // compositions; existing pure-literal lowering remains unchanged.
