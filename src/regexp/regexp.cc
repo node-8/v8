@@ -726,10 +726,18 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
     }
     if (++depth > 100) return false;
     auto* body = quantifier->body();
-    while (body->IsGroup()) {
-      auto* group = body->AsGroup();
-      if (++depth > 100 || group->flags() != flags) return false;
-      body = group->body();
+    ZoneVector<RegExpCapture*> captures(zone);
+    while (body->IsGroup() || body->IsCapture()) {
+      if (++depth > 100) return false;
+      if (body->IsGroup()) {
+        auto* group = body->AsGroup();
+        if (group->flags() != flags) return false;
+        body = group->body();
+      } else {
+        auto* capture = body->AsCapture();
+        captures.push_back(capture);
+        body = capture->body();
+      }
     }
     std::optional<base::uc32> code_point;
     if (body->IsAtom()) {
@@ -745,10 +753,17 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
     ZoneList<RegExpTree*> lowered_body(1, zone);
     // Keep ASCII and mixed closures on their existing loop/emission paths.
     if (!append_code_point(*code_point, &lowered_body, true)) return false;
+    RegExpTree* repeated_body = lowered_body.first();
+    for (auto it = captures.rbegin(); it != captures.rend(); ++it) {
+      auto* capture = zone->New<RegExpCapture>((*it)->index());
+      capture->set_name((*it)->name());
+      capture->set_body(repeated_body);
+      repeated_body = capture;
+    }
     output->Add(zone->New<RegExpQuantifier>(
                     quantifier->min(), quantifier->max(),
                     quantifier->quantifier_type(), quantifier->index(),
-                    lowered_body.first()),
+                    repeated_body),
                 zone);
     ++state->quantifier_count;
     state->used_extended_syntax = true;
