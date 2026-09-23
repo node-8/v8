@@ -832,12 +832,17 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
   }
   if (tree->IsGroup()) {
     auto* group = tree->AsGroup();
-    if (group->flags() != flags) return false;
+    // DotAll is already reflected in the parsed character ranges.
+    if ((group->flags() & ~RegExpFlag::kDotAll) !=
+        (flags & ~RegExpFlag::kDotAll)) {
+      return false;
+    }
     // The caller clears internal i/u/v after lowering. Retaining this wrapper
     // would restore those flags and fold the encoded bytes a second time.
     state->used_extended_syntax = true;
-    return AppendNode8CaseFoldedLiteral(group->body(), flags, zone, output,
-                                        state, depth + 1, in_quantifier_body);
+    return AppendNode8CaseFoldedLiteral(
+        group->body(), group->flags(), zone, output, state, depth + 1,
+        in_quantifier_body);
   }
   if (tree->IsEmpty() ||
       (tree->IsAssertion() &&
