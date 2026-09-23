@@ -717,7 +717,8 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
   }
   if (tree->IsQuantifier()) {
     auto* quantifier = tree->AsQuantifier();
-    if (state->quantifier_count != 0 || !quantifier->is_greedy() ||
+    if (state->quantifier_count != 0 ||
+        (!quantifier->is_greedy() && !quantifier->is_non_greedy()) ||
         quantifier->min() > 3 || quantifier->max() != RegExpTree::kInfinity) {
       return false;
     }
