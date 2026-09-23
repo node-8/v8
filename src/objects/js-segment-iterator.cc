@@ -46,7 +46,7 @@ size_t CommonIndependentSequenceEnd(const std::string& bytes, size_t index) {
 
   if (HasBytes(bytes, index, 2)) {
     const uint8_t second = static_cast<uint8_t>(bytes[index + 1]);
-    if ((first == 0xc2 && second >= 0xa0 && second != 0xad) ||
+    if ((first == 0xc2 && second >= 0xa0 && second <= 0xbf && second != 0xad) ||
         (first >= 0xc3 && first <= 0xcb && IsContinuationByte(second)) ||
         ((first == 0xd0 || first == 0xd1) && IsContinuationByte(second)) ||
         (first == 0xd2 && second >= 0x80 && second <= 0x82)) {

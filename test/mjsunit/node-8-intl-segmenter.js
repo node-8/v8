@@ -136,6 +136,63 @@ for (const input
   assertContainingMatchesIteration(graphemeSegmenter, input);
 }
 
+// Fixed byte partitions, independent of iteration or ICU-derived expectations.
+// Read at most the expected number of records plus one termination result.
+function assertFixedGraphemes(input, expectedParts) {
+  const segments = graphemeSegmenter.segment(input);
+  const iterator = segments[Symbol.iterator]();
+  const actual = [];
+  let expectedIndex = 0;
+  for (const expectedPart of expectedParts) {
+    const item = iterator.next();
+    assertFalse(item.done);
+    assertEquals(expectedPart, item.value.segment);
+    assertEquals(expectedIndex, item.value.index);
+    actual.push(item.value);
+    const end = expectedIndex + expectedPart.length;
+    for (let index = expectedIndex; index < end; ++index) {
+      const containing = segments.containing(index);
+      assertEquals(expectedIndex, containing.index);
+      assertEquals(expectedPart, containing.segment);
+      assertEquals(input, containing.input);
+    }
+    expectedIndex = end;
+  }
+  assertEquals(input.length, expectedIndex);
+  assertTrue(iterator.next().done);
+  assertComposes(input, actual);
+  assertEquals(undefined, segments.containing(-1));
+  assertEquals(undefined, segments.containing(input.length));
+}
+
+function assertFixedGraphemesWithPrefix(input, expectedParts) {
+  assertFixedGraphemes(input, expectedParts);
+  assertFixedGraphemes(
+      'Aé' + input + '中B', ['A', 'é', ...expectedParts, '中', 'B']);
+}
+
+assertEquals(2, 'é'.length);
+const rawC2 = String.fromCharCode(0xc2);
+for (let second = 0; second <= 0xff; ++second) {
+  const tail = String.fromCharCode(second);
+  const input = rawC2 + tail;
+  // C2 + 80..BF is one scalar, including C1 controls and soft hyphen.
+  // Otherwise C2 is malformed and the following byte starts a separate segment.
+  assertFixedGraphemesWithPrefix(
+      input, second >= 0x80 && second <= 0xbf ? [input] : [rawC2, tail]);
+}
+assertFixedGraphemesWithPrefix(rawC2, [rawC2]);
+
+// GB4 prevents C1 controls and soft hyphen from taking a following Extend.
+// Nearby non-control values must still retain that combining character.
+for (const second of [0x80, 0x9f, 0xa0, 0xac, 0xad, 0xae, 0xbf]) {
+  const scalar = rawC2 + String.fromCharCode(second);
+  const extend = '\u0301';
+  const isControl = second <= 0x9f || second === 0xad;
+  assertFixedGraphemesWithPrefix(
+      scalar + extend, isControl ? [scalar, extend] : [scalar + extend]);
+}
+
 const lifetimeInput = 'Aé中😀'.repeat(32);
 const retainedIterator =
     graphemeSegmenter.segment(lifetimeInput)[Symbol.iterator]();
