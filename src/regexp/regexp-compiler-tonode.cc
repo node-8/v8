@@ -1320,6 +1320,11 @@ RegExpNode* RegExpAssertion::ToNodeImpl(RegExpCompiler* compiler,
       return node;
     }
     case Type::END_OF_LINE: {
+      if (v8_flags.utf8_string_semantics && compiler->one_byte()) {
+        RegExpNode* node = AssertionNode::Node8BeforeNewline(on_success);
+        REGISTER_NODE(node);
+        return node;
+      }
       // Compile $ in multiline regexps as an alternation with a positive
       // lookahead in one side and an end-of-input on the other side.
       // We need two registers for the lookahead.

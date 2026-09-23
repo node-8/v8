@@ -70,8 +70,10 @@ assertMatchIndices(
 assertMatchIndices(
     [[0, 10], [4, 9], [6, 9]], regexp('^', '((' + classSource + ')+)', '$'),
     prefix + field + tail);
-// Multiline and word boundaries remain separate migrations.
-assertNull(regexp('^', mixedExact, '$', 'dmu').exec(prefix + field + tail));
+// Multiline preserves captures; word boundaries remain a separate migration.
+assertEquals([prefix + field + tail, field, cjk], Array.from(assertMatchIndices(
+    [[0, 10], [4, 9], [6, 9]], regexp('^', mixedExact, '$', 'dmu'),
+    prefix + field + tail)));
 assertNull(new RegExp('^\\b' + prefix + mixedExact + tail + '$', 'du')
                .exec(prefix + field + tail));
 // Nonempty composed lookahead preserves the Unicode field captures.

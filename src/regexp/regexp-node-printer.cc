@@ -209,6 +209,9 @@ void RegExpNodePrinter<RegExpNode>::VisitAssertion(AssertionNode* node) {
     case AssertionNode::AFTER_NEWLINE:
       os() << "after newline";
       break;
+    case AssertionNode::NODE8_BEFORE_NEWLINE:
+      os() << "node-8 before newline";
+      break;
     case AssertionNode::NODE8_END_LITERAL:
       os() << "node-8 end literal";
       break;

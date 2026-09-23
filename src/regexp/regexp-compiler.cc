@@ -2067,6 +2067,37 @@ void EmitWordCheck(RegExpMacroAssembler* assembler, Label* word,
                                      fall_through_on_word ? non_word : word);
 }
 
+// Check UTF-8 line boundaries without consuming or decoding the subject.
+EmitResult EmitNode8LineAssertion(RegExpCompiler* compiler,
+                                 RegExpNode* on_success, Trace* trace,
+                                 bool at_line_start) {
+  RegExpMacroAssembler* assembler = compiler->macro_assembler();
+  const int offset = trace->cp_offset();
+  Trace successor_trace(*trace);
+  successor_trace.InvalidateCurrentCharacter();
+  Label ok;
+  if (at_line_start) assembler->CheckAtStart(offset, &ok);
+  assembler->LoadCurrentCharacter(offset - (at_line_start ? 1 : 0),
+                                  at_line_start ? trace->backtrack() : &ok);
+  assembler->CheckCharacter('\n', &ok);
+  assembler->CheckCharacter('\r', &ok);
+  if (at_line_start) {
+    assembler->CheckCharacterNotInRange(0xa8, 0xa9, trace->backtrack());
+    assembler->LoadCurrentCharacter(offset - 2, trace->backtrack());
+    assembler->CheckNotCharacter(0x80, trace->backtrack());
+    assembler->LoadCurrentCharacter(offset - 3, trace->backtrack());
+    assembler->CheckNotCharacter(0xe2, trace->backtrack());
+  } else {
+    assembler->CheckNotCharacter(0xe2, trace->backtrack());
+    assembler->LoadCurrentCharacter(offset + 1, trace->backtrack());
+    assembler->CheckNotCharacter(0x80, trace->backtrack());
+    assembler->LoadCurrentCharacter(offset + 2, trace->backtrack());
+    assembler->CheckCharacterNotInRange(0xa8, 0xa9, trace->backtrack());
+  }
+  assembler->Bind(&ok);
+  return on_success->Emit(compiler, &successor_trace);
+}
+
 // Emit the code to check for a ^ in multiline mode (1-character lookbehind
 // that matches newline or the start of input).
 EmitResult EmitHat(RegExpCompiler* compiler, RegExpNode* on_success,
@@ -2246,7 +2277,18 @@ EmitResult AssertionNode::Emit(RegExpCompiler* compiler, Trace* trace) {
       }
     } break;
     case AFTER_NEWLINE:
+      if (v8_flags.utf8_string_semantics && compiler->one_byte()) {
+        if (trace->cp_offset() - 3 < RegExpMacroAssembler::kMinCPOffset) {
+          return trace->Flush(compiler, this);
+        }
+        return EmitNode8LineAssertion(compiler, on_success(), trace, true);
+      }
       return EmitHat(compiler, on_success(), trace);
+    case NODE8_BEFORE_NEWLINE:
+      if (trace->cp_offset() + 2 > RegExpMacroAssembler::kMaxCPOffset) {
+        return trace->Flush(compiler, this);
+      }
+      return EmitNode8LineAssertion(compiler, on_success(), trace, false);
     case AT_BOUNDARY:
     case AT_NON_BOUNDARY: {
       return EmitBoundaryCheck(compiler, trace);

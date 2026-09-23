@@ -849,7 +849,11 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
        (tree->AsAssertion()->assertion_type() ==
             RegExpAssertion::Type::START_OF_INPUT ||
         tree->AsAssertion()->assertion_type() ==
-            RegExpAssertion::Type::END_OF_INPUT))) {
+            RegExpAssertion::Type::END_OF_INPUT ||
+        tree->AsAssertion()->assertion_type() ==
+            RegExpAssertion::Type::START_OF_LINE ||
+        tree->AsAssertion()->assertion_type() ==
+            RegExpAssertion::Type::END_OF_LINE))) {
     output->Add(tree, zone);
     state->used_extended_syntax = true;
     return true;
@@ -966,7 +970,9 @@ RegExpTree* GetNode8ComposedLiteralByteTree(RegExpTree* tree, RegExpFlags flags,
   if (tree->IsAssertion()) {
     auto type = tree->AsAssertion()->assertion_type();
     return type == RegExpAssertion::Type::START_OF_INPUT ||
-                   type == RegExpAssertion::Type::END_OF_INPUT
+                   type == RegExpAssertion::Type::END_OF_INPUT ||
+                   type == RegExpAssertion::Type::START_OF_LINE ||
+                   type == RegExpAssertion::Type::END_OF_LINE
                ? tree
                : nullptr;
   }

@@ -82,8 +82,9 @@ assertMatchIndices(
 assertMatchIndices(
     [[0, 10], [4, 9], [6, 9]],
     new RegExp('(?:key=' + mixedExact + '!$|none)', 'du'), subject);
-// Multiline and word boundaries remain separate migrations.
-assertNull(expression(mixedExact, '', 'dmu').exec(subject));
+// Multiline preserves captures; word boundaries remain a separate migration.
+assertEquals([subject, field, cjk], Array.from(assertMatchIndices(
+    [[0, 10], [4, 9], [6, 9]], expression(mixedExact, '', 'dmu'), subject)));
 assertNull(
     new RegExp('(?:^\\bkey=' + mixedExact + '!|none)', 'du').exec(subject));
 // The lookahead is local to the anchored branch and consumes nothing itself.

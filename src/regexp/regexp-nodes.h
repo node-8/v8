@@ -612,6 +612,7 @@ class AssertionNode : public SeqRegExpNode {
     AT_START,
     AT_BOUNDARY,
     AT_NON_BOUNDARY,
+    NODE8_BEFORE_NEWLINE,
     AFTER_NEWLINE,
     NODE8_END_LITERAL
   };
@@ -629,6 +630,10 @@ class AssertionNode : public SeqRegExpNode {
   }
   static AssertionNode* AfterNewline(RegExpNode* on_success) {
     return on_success->zone()->New<AssertionNode>(AFTER_NEWLINE, on_success);
+  }
+  static AssertionNode* Node8BeforeNewline(RegExpNode* on_success) {
+    return on_success->zone()->New<AssertionNode>(NODE8_BEFORE_NEWLINE,
+                                               on_success);
   }
   static AssertionNode* Node8EndLiteral(
       base::Vector<const base::uc16> literal, int minimum_remaining,

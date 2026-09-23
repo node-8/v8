@@ -30,10 +30,20 @@ bool SatisfiesAssertion(RegExpAssertion::Type type,
       return position == context.length();
     case RegExpAssertion::Type::START_OF_LINE:
       if (position == 0) return true;
-      return unibrow::IsLineTerminator(context[position - 1]);
+      return unibrow::IsLineTerminator(context[position - 1]) ||
+             (sizeof(Character) == 1 && v8_flags.utf8_string_semantics &&
+              position >= 3 && context[position - 3] == 0xe2 &&
+              context[position - 2] == 0x80 &&
+              (context[position - 1] == 0xa8 ||
+               context[position - 1] == 0xa9));
     case RegExpAssertion::Type::END_OF_LINE:
       if (position == context.length()) return true;
-      return unibrow::IsLineTerminator(context[position]);
+      return unibrow::IsLineTerminator(context[position]) ||
+             (sizeof(Character) == 1 && v8_flags.utf8_string_semantics &&
+              context.length() - position >= 3 && context[position] == 0xe2 &&
+              context[position + 1] == 0x80 &&
+              (context[position + 2] == 0xa8 ||
+               context[position + 2] == 0xa9));
     case RegExpAssertion::Type::BOUNDARY:
       if (context.length() == 0) {
         return false;
