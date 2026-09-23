@@ -618,6 +618,10 @@ RegExpTree* GetNode8ForwardClassByteTree(ZoneList<CharacterRange>* ranges,
 }
 
 #ifdef V8_INTL_SUPPORT
+RegExpTree* GetNode8ComposedLiteralByteTree(RegExpTree* tree, RegExpFlags flags,
+                                          Zone* zone,
+                                          Node8ComposedState* state, int depth);
+
 struct Node8CaseFoldState {
   bool used_extended_syntax = false;
   bool needs_byte_lowering = false;
@@ -851,6 +855,29 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
     // The parser already resolves dotAll ranges and multiline assertions.
     const RegExpFlags parsed_flags =
         RegExpFlag::kDotAll | RegExpFlag::kMultiline;
+    const RegExpFlags local_fold_flags = parsed_flags | RegExpFlag::kIgnoreCase;
+    if (IsIgnoreCase(flags) && !IsIgnoreCase(group->flags()) &&
+        (group->flags() & ~local_fold_flags) == (flags & ~local_fold_flags)) {
+      Node8ComposedState sensitive;
+      RegExpTree* lowered = GetNode8ComposedLiteralByteTree(
+          group->body(), group->flags(), zone, &sensitive, depth + 1);
+      if (lowered == nullptr || sensitive.contains_lookaround ||
+          sensitive.contains_backreference) {
+        return false;
+      }
+      state->classes.contains_decoder |= sensitive.contains_decoder;
+      state->classes.contains_forward_dispatch |=
+          sensitive.contains_forward_dispatch;
+      state->classes.contains_word_assertion |=
+          sensitive.contains_word_assertion;
+      state->used_extended_syntax = true;
+      state->needs_byte_lowering |=
+          lowered != group->body() || sensitive.contains_decoder ||
+          sensitive.contains_word_assertion;
+      // The caller clears internal i; this child must stay case-sensitive.
+      output->Add(lowered, zone);
+      return true;
+    }
     if ((group->flags() & ~parsed_flags) != (flags & ~parsed_flags)) {
       return false;
     }
