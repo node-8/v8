@@ -626,8 +626,11 @@ struct Node8CaseFoldState {
 
 bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zone,
                                  ZoneList<RegExpTree*>* output,
-                                 Node8CaseFoldState* state, int depth = 0) {
-  if (depth > 100) return false;
+                                 Node8CaseFoldState* state, int depth = 0,
+                                 bool non_ascii_body = false) {
+  if (depth > 100 || (non_ascii_body && tree->min_match() == 0)) {
+    return false;
+  }
   auto append_code_point = [&](base::uc32 code_point,
                                ZoneList<RegExpTree*>* destination,
                                bool non_ascii_only = false) {
@@ -667,17 +670,17 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
       base::uc32 code_point = data[i];
       // Byte parsing preserves astral and surrogate values as uc32 leaves.
       if (code_point >= 0xd800 && code_point <= 0xdfff) return false;
-      if (!append_code_point(code_point, output)) return false;
+      if (!append_code_point(code_point, output, non_ascii_body)) return false;
     }
     return true;
   }
   if (auto code_point = GetSingletonClassCodePoint(tree, zone)) {
-    return append_code_point(*code_point, output);
+    return append_code_point(*code_point, output, non_ascii_body);
   }
   if (tree->IsText()) {
     for (const auto& element : *tree->AsText()->elements()) {
       if (!AppendNode8CaseFoldedLiteral(element.tree(), flags, zone, output,
-                                        state, depth + 1)) {
+                                        state, depth + 1, non_ascii_body)) {
         return false;
       }
     }
@@ -686,13 +689,14 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
   if (tree->IsAlternative()) {
     for (auto* node : *tree->AsAlternative()->nodes()) {
       if (!AppendNode8CaseFoldedLiteral(node, flags, zone, output, state,
-                                        depth + 1)) {
+                                        depth + 1, non_ascii_body)) {
         return false;
       }
     }
     return true;
   }
   if (tree->IsDisjunction()) {
+    if (non_ascii_body) return false;
     state->saw_original_disjunction = true;
     auto* branches = tree->AsDisjunction()->alternatives();
     // Larger original choices can use prefix factoring and class merging.
@@ -717,54 +721,23 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
   }
   if (tree->IsQuantifier()) {
     auto* quantifier = tree->AsQuantifier();
-    if (state->quantifier_count != 0 ||
+    if (non_ascii_body || state->quantifier_count != 0 ||
         (!quantifier->is_greedy() && !quantifier->is_non_greedy()) ||
         quantifier->max() < 1) {
       return false;
     }
-    if (++depth > 100) return false;
-    auto* body = quantifier->body();
-    ZoneVector<RegExpCapture*> captures(zone);
-    while (body->IsGroup() || body->IsCapture()) {
-      if (++depth > 100) return false;
-      if (body->IsGroup()) {
-        auto* group = body->AsGroup();
-        if (group->flags() != flags) return false;
-        body = group->body();
-      } else {
-        auto* capture = body->AsCapture();
-        captures.push_back(capture);
-        body = capture->body();
-      }
-    }
     ZoneList<RegExpTree*> lowered_body(1, zone);
-    // Keep ASCII and mixed closures on their existing loop/emission paths.
-    if (body->IsAtom()) {
-      auto data = body->AsAtom()->data();
-      if (data.empty()) return false;
-      for (base::uc32 code_point : data) {
-        if ((code_point >= 0xd800 && code_point <= 0xdfff) ||
-            !append_code_point(code_point, &lowered_body, true)) {
-          return false;
-        }
-      }
-    } else {
-      auto code_point = GetSingletonClassCodePoint(body, zone);
-      if (!code_point || !append_code_point(*code_point, &lowered_body, true)) {
-        return false;
-      }
+    // Keep ASCII/mixed closures, nullable bodies and nested loops unchanged.
+    if (!AppendNode8CaseFoldedLiteral(quantifier->body(), flags, zone,
+                                     &lowered_body, state, depth + 1, true) ||
+        lowered_body.is_empty()) {
+      return false;
     }
     RegExpTree* repeated_body =
         lowered_body.length() == 1
             ? lowered_body.first()
             : zone->New<RegExpAlternative>(
                   zone->New<ZoneList<RegExpTree*>>(lowered_body, zone));
-    for (auto it = captures.rbegin(); it != captures.rend(); ++it) {
-      auto* capture = zone->New<RegExpCapture>((*it)->index());
-      capture->set_name((*it)->name());
-      capture->set_body(repeated_body);
-      repeated_body = capture;
-    }
     output->Add(zone->New<RegExpQuantifier>(
                     quantifier->min(), quantifier->max(),
                     quantifier->quantifier_type(), quantifier->index(),
@@ -778,7 +751,8 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
     auto* capture = tree->AsCapture();
     ZoneList<RegExpTree*> body(4, zone);
     if (!AppendNode8CaseFoldedLiteral(capture->body(), flags, zone, &body,
-                                      state, depth + 1) || body.is_empty()) {
+                                     state, depth + 1, non_ascii_body) ||
+        body.is_empty()) {
       return false;
     }
     auto* result = zone->New<RegExpCapture>(capture->index());
@@ -798,7 +772,7 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
     // would restore those flags and fold the encoded bytes a second time.
     state->used_extended_syntax = true;
     return AppendNode8CaseFoldedLiteral(group->body(), flags, zone, output,
-                                        state, depth + 1);
+                                        state, depth + 1, non_ascii_body);
   }
   if (tree->IsEmpty() ||
       (tree->IsAssertion() &&
