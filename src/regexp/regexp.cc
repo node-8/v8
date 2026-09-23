@@ -620,7 +620,6 @@ RegExpTree* GetNode8ForwardClassByteTree(ZoneList<CharacterRange>* ranges,
 struct Node8CaseFoldState {
   bool used_extended_syntax = false;
   bool needs_byte_lowering = false;
-  bool saw_outer_disjunction = false;
   int quantifier_count = 0;
 };
 
@@ -696,7 +695,6 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
     return true;
   }
   if (tree->IsDisjunction()) {
-    if (!non_ascii_body) state->saw_outer_disjunction = true;
     auto* branches = tree->AsDisjunction()->alternatives();
     // Larger original choices can use prefix factoring and class merging.
     // Keep them on the original route until lowering preserves those paths.
@@ -3024,8 +3022,7 @@ bool RegExpImpl::CompileIrregexpFromSource(
                                      &state) &&
         !literals.is_empty() && !compile_data.node8_pattern_has_malformed &&
         (state.quantifier_count == 0 ||
-         (original_tree->IsAnchoredAtStart() &&
-          !state.saw_outer_disjunction)) &&
+         original_tree->IsAnchoredAtStart()) &&
         // Preserve the original matching code for newly admitted ASCII-safe
         // compositions; existing pure-literal lowering remains unchanged.
         (!state.used_extended_syntax || state.needs_byte_lowering)) {
