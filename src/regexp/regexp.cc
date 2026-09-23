@@ -694,10 +694,7 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
   }
   if (tree->IsDisjunction()) {
     auto* branches = tree->AsDisjunction()->alternatives();
-    // Larger original choices can use prefix factoring and class merging.
-    // Keep them on the original route until lowering preserves those paths.
-    if (branches->length() != 2) return false;
-    auto* choices = zone->New<ZoneList<RegExpTree*>>(2, zone);
+    auto* choices = zone->New<ZoneList<RegExpTree*>>(branches->length(), zone);
     for (auto* branch : *branches) {
       ZoneList<RegExpTree*> body(4, zone);
       if (!AppendNode8CaseFoldedLiteral(branch, flags, zone, &body, state,
