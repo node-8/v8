@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 // Flags: --utf8-string-semantics
-// Fixed stock/byte oracles for Unicode-folded lookaheads.
+// Fixed stock/byte oracles for local-i-disable forward lookaheads.
 'use strict';
 
 (() => {
@@ -55,43 +55,45 @@
   const raw=bytes=>fixture(bytes,bytes);
   const row=(id,source,subject,values,bytes,stock,
              condition='all',extraFlags='i',start=0,names)=>
-    ({id,source,subject,values,bytes,stock,condition,extraFlags,start,names});
+    ({id,source:'(?-i:'+source+')',subject,values,bytes,stock,
+      condition,extraFlags,start,names});
   const rows=[],bang=ascii('!');
-  for(const [name,pattern,target,fold] of [
-    ['latin',E,EC,'all'],['kelvin',ascii('k'),K,'unicode'],
-    ['long-s',ascii('s'),S,'unicode'],['cjk',C,C,'all'],
-    ['ascii',ascii('a'),ascii('A'),'all'],['astral',A,A,'all']
+  for(const [name,target,other] of [
+    ['latin',E,EC],['kelvin',K,ascii('k')],['long-s',S,ascii('s')],
+    ['cjk',C,E],['ascii',ascii('a'),ascii('A')],['astral',A,C]
   ]) {
-    const p=string(pattern),b=target.bytes.length,s=target.stock.length;
+    const p=string(target),b=target.bytes.length,s=target.stock.length;
+    const ob=other.bytes.length,os=other.stock.length;
     rows.push(
       row(name+'positive','^(?='+p+')('+p+')$',target,[target,target],
-        [[0,b],[0,b]],[[0,s],[0,s]],fold),
+        [[0,b],[0,b]],[[0,s],[0,s]]),
+      row(name+'wrong-case','^(?='+p+')('+p+')$',other,null),
+      row(name+'negative-case','^(?!'+p+')('+string(other)+')$',other,[other,other],
+        [[0,ob],[0,ob]],[[0,os],[0,os]]),
       row(name+'contradiction','^(?!'+p+')('+p+')$',target,null),
       row(name+'negative-other','^(?!'+p+')(!)$',bang,[bang,bang],
         [[0,1],[0,1]],[[0,1],[0,1]]),
       row(name+'zero-positive','(?=('+p+'))',join(bang,target),[empty,target],
-        [[1,1],[1,1+b]],[[1,1],[1,1+s]],fold),
-      row(name+'zero-negative','^(?!'+p+')()',target,[empty,empty],
-        [[0,0],[0,0]],[[0,0],[0,0]],fold==='unicode'?'stock-legacy':'never'),
+        [[1,1],[1,1+b]],[[1,1],[1,1+s]]),
+      row(name+'zero-negative','^(?!'+p+')()',target,null),
       row(name+'nested-positive','^(?=(?='+p+')'+p+')('+p+')$',target,[target,target],
-        [[0,b],[0,b]],[[0,s],[0,s]],fold),
+        [[0,b],[0,b]],[[0,s],[0,s]]),
       row(name+'nested-negative','^(?!(?!'+p+'))('+p+')$',target,[target,target],
-        [[0,b],[0,b]],[[0,s],[0,s]],fold),
+        [[0,b],[0,b]],[[0,s],[0,s]]),
       row(name+'captures','^(?=('+p+'))('+p+')$',target,[target,target,target],
-        [[0,b],[0,b],[0,b]],[[0,s],[0,s],[0,s]],fold),
-      row(name+'cleared-capture','^(?!('+p+'))(!)$',bang,[bang,undefined,bang],
-        [[0,1],undefined,[0,1]],[[0,1],undefined,[0,1]]),
+        [[0,b],[0,b],[0,b]],[[0,s],[0,s],[0,s]]),
+      row(name+'cleared-capture','^(?!('+p+'))('+string(other)+')$',other,
+        [other,undefined,other],[[0,ob],undefined,[0,ob]],[[0,os],undefined,[0,os]]),
       row(name+'repeat','^(?:(?='+p+')('+p+'))+$',join(target,target),
-        [join(target,target),target],[[0,2*b],[b,2*b]],[[0,2*s],[s,2*s]],fold)
+        [join(target,target),target],[[0,2*b],[b,2*b]],[[0,2*s],[s,2*s]])
     );
   }
   for(const item of [...rows]) {
-    rows.push({...item,id:'local-'+item.id,source:'(?i:'+item.source+')',extraFlags:''});
+    rows.push({...item,id:'nested-'+item.id,source:'(?i:'+item.source+')',extraFlags:''});
   }
-  const e=string(E),c=string(C),double=join(EC,EC);
+  const e=string(E),ec=string(EC),c=string(C),double=join(E,E);
   rows.push(
     row('ascii-one-scalar','(?!^|$)',E,null),
-    row('local-ascii-one-scalar','(?i:(?!^|$))',E,null,undefined,undefined,'all',''),
     row('ascii-two-scalars','(?!^|$)',join(E,C),[empty],[[2,2]],[[1,1]])
   );
   for(const flag of ['g','y'])for(const [name,bo,so] of [
@@ -99,12 +101,12 @@
   ]) {
     const found=name!=='end'&&!(byte&&flag==='y'&&name==='inside');
     const bp=name==='start'?0:2;
-    rows.push(row(flag+name,'(?=('+e+'))',double,found?[empty,EC]:null,
+    rows.push(row(flag+name,'(?=('+e+'))',double,found?[empty,E]:null,
       [[bp,bp],[bp,bp+2]],[[so,so],[so,so+1]],'all','i'+flag,byte?bo:so));
   }
   const malformed=raw([0x80]),prefix=raw([0xe2,0x80]);
   const prefixCapture=byte?prefix:raw([0xe2]);
-  const line=join(ascii('\n'),EC);
+  const line=join(ascii('\n'),E);
   rows.push(
     row('malformed-dot','^(?=(.))',malformed,[empty,malformed],
       [[0,0],[0,1]],[[0,0],[0,1]]),
@@ -112,32 +114,37 @@
       [[0,0],[0,2]],[[0,0],[0,1]]),
     row('malformed-replacement','^(?=('+string(R)+'))',malformed,[empty,malformed],
       [[0,0],[0,1]],[[0,0],[0,1]],'byte'),
-    row('decoder-positive','^(?=([^a]))',EC,[empty,EC],
+    row('decoder-positive','^(?=([^a]))',E,[empty,E],
       [[0,0],[0,2]],[[0,0],[0,1]]),
-    row('decoder-excluded','^(?=[^'+e+'])',EC,null),
-    row('sensitive-child','^(?=(?-i:'+e+'))('+e+')$',E,[E,E],
+    row('decoder-excluded','^(?=[^'+e+'])',E,null),
+    row('nested-fold','^(?i:(?='+e+'))('+ec+')$',EC,[EC,EC],
       [[0,2],[0,2]],[[0,1],[0,1]]),
-    row('sensitive-child-negative','^(?=(?-i:'+e+'))('+e+')$',EC,null),
-    row('local-m','(?m:^(?=('+e+'))('+e+')$)',join(LS,EC,PS),[EC,EC,EC],
+    row('nested-fold-negative','^(?i:(?!'+e+'))('+ec+')$',EC,null),
+    {...row('mixed-siblings','',join(E,EC),[join(E,EC),E,EC],
+      [[0,4],[0,2],[2,4]],[[0,2],[0,1],[1,2]]),
+      source:'^(?-i:(?='+e+')('+e+'))('+e+')$'},
+    row('local-m','(?m:^(?=('+e+'))('+e+')$)',join(LS,E,PS),[E,E,E],
       [[3,5],[3,5],[3,5]],[[1,2],[1,2],[1,2]]),
     row('local-s','(?s:^(?=(.'+e+'))(.'+e+')$)',line,[line,line,line],
       [[0,3],[0,3],[0,3]],[[0,2],[0,2],[0,2]]),
-    row('excluded-lookbehind','^(?=(?<=^)('+e+'))('+e+')$',EC,[EC,EC,EC],
+    row('excluded-lookbehind','^(?=(?<=^)('+e+'))('+e+')$',E,[E,E,E],
       [[0,2],[0,2],[0,2]],[[0,1],[0,1],[0,1]],'stock'),
-    row('excluded-backref','^(?=('+e+')\\1)('+e+e+')$',double,[double,EC,double],
+    row('excluded-backref','^(?=('+e+')\\1)('+e+e+')$',double,[double,E,double],
       [[0,4],[0,2],[0,4]],[[0,2],[0,1],[0,2]],'stock'),
-    row('excluded-sensitive-lookahead','^(?-i:(?='+e+')('+e+'))$',E,[E,E],
-      [[0,2],[0,2]],[[0,1],[0,1]]),
-    row('named','^(?=(?<inside>'+e+'))(?<outside>'+e+')$',EC,[EC,EC,EC],
+    row('named','^(?=(?<inside>'+e+'))(?<outside>'+e+')$',E,[E,E,E],
       [[0,2],[0,2],[0,2]],[[0,1],[0,1],[0,1]],'all','i',0,{inside:1,outside:2}),
     row('optional-empty','^(?:(?='+e+')('+e+'))?$',empty,[empty,undefined],
       [[0,0],undefined],[[0,0],undefined]),
-    row('optional-full','^(?:(?='+e+')('+e+'))?$',EC,[EC,EC],
+    row('optional-full','^(?:(?='+e+')('+e+'))?$',E,[E,E],
       [[0,2],[0,2]],[[0,1],[0,1]]),
     row('branches','^(?:(?='+e+')('+e+')|(?='+c+')('+c+'))$',C,[C,undefined,C],
       [[0,3],undefined,[0,3]],[[0,1],undefined,[0,1]]),
-    row('boundaries','^\\B(?=('+e+'))\\B('+e+')$',EC,[EC,EC,EC],
-      [[0,2],[0,2],[0,2]],[[0,1],[0,1],[0,1]])
+    row('boundaries','^\\B(?=('+e+'))\\B('+e+')$',E,[E,E,E],
+      [[0,2],[0,2],[0,2]],[[0,1],[0,1],[0,1]]),
+    row('migration-boundary','\\B(?='+e+')('+e+')',E,[E,E],
+      [[0,2],[0,2]],[[0,1],[0,1]]),
+    {...row('migration-root','',E,[E,E],[[0,2],[0,2]],[[0,1],[0,1]]),
+      source:'^(?-i:(?='+e+')('+e+'))$'}
   );
   function snapshot(match) {
     if (match === null) return null;
@@ -205,11 +212,12 @@
   const intrinsicExec = RegExp.prototype.exec;
   let apiCases = 0;
   function makeApi(source, flags, slow, local) {
+    source='(?-i:'+source+')';
     if(local) {source='(?i:'+source+')';flags=flags.replace('i','');}
     const wrap = re => {
       let calls=0;
       re.exec=function(subject) {
-        if(++calls>64) throw Error('FOLDED_LOOKAHEADS_BOUNDED_EXEC');
+        if(++calls>64) throw Error('LOCAL_DISABLE_LOOKAHEADS_BOUNDED_EXEC');
         return intrinsicExec.call(this,subject);
       };
       return re;
@@ -231,13 +239,13 @@
     }
     return [output,false];
   }
-  const subject=join(EC,C,E),data=selected(subject),input=string(subject);
+  const subject=join(E,C,EC,E),data=selected(subject),input=string(subject);
   for(const grammar of ['', 'u', 'v']) {
     const apiRows=[
-      ['positive','((?='+e+'))',byte?[[0,0],[5,5]]:[[0,0],[2,2]]],
-      ['negative','((?!'+e+'))',byte?[[2,2],[7,7]]:[[1,1],[3,3]]],
-      ['interior','((?!^|$))',byte?[[2,2],[5,5]]:[[1,1],[2,2]]],
-      ['consuming','(?='+e+')('+e+')',byte?[[0,2],[5,7]]:[[0,1],[2,3]]],
+      ['positive','((?='+e+'))',byte?[[0,0],[7,7]]:[[0,0],[3,3]]],
+      ['negative','((?!'+e+'))',byte?[[2,2],[5,5],[9,9]]:[[1,1],[2,2],[4,4]]],
+      ['interior','((?!^|$))',byte?[[2,2],[5,5],[7,7]]:[[1,1],[2,2],[3,3]]],
+      ['consuming','(?='+e+')('+e+')',byte?[[0,2],[7,9]]:[[0,1],[3,4]]],
     ];
     for(const [name,source,spans] of apiRows) {
       const expectedMatches=spans.map(([start,end])=>{
@@ -267,7 +275,7 @@
           equal(tag+'replace',units(input.replace(re,'<$1>')),replaced,tag);
           const calls=[];
           equal(tag+'callback-result',units(input.replace(re,(m,capture,offset,original)=>{
-            if(calls.length>16) throw Error('FOLDED_LOOKAHEADS_BOUNDED_CALLBACK');
+            if(calls.length>16) throw Error('LOCAL_DISABLE_LOOKAHEADS_BOUNDED_CALLBACK');
             calls.push([units(m),units(capture),offset,units(original)]);
             return '<'+capture+'>';
           })),replaced,tag);
@@ -285,12 +293,12 @@
   }
   equal('fixed-api-cases',apiCases,48);
   equal('fixed-api-checks',checks-apiStart+1,962);
-  equal('fixed-case-count',cases,888);
-  equal('fixed-check-count',checks+1,8072);
-  emit(encode({kind:'folded-lookaheads-profile',profile,actualWidth:width}));
-  emit(encode({kind:'folded-lookaheads',profile,
-    cases,checks,expectedCases:888,expectedChecks:8072,
+  equal('fixed-case-count',cases,1038);
+  equal('fixed-check-count',checks+1,9272);
+  emit(encode({kind:'local-disable-lookaheads-profile',profile,actualWidth:width}));
+  emit(encode({kind:'local-disable-lookaheads',profile,
+    cases,checks,expectedCases:1038,expectedChecks:9272,
     passed:failureCount===0,failureCount,failedCases:Array.from(failedCases),failures,
     failureDetailsTruncated:failureCount>failures.length,performanceTested:false}));
-  if(failureCount!==0) throw Error('FOLDED_LOOKAHEADS_ORACLE: '+failureCount);
+  if(failureCount!==0) throw Error('LOCAL_DISABLE_LOOKAHEADS_ORACLE: '+failureCount);
 })();

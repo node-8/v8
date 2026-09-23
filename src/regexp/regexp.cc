@@ -883,10 +883,11 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
       Node8ComposedState sensitive;
       RegExpTree* lowered = GetNode8ComposedLiteralByteTree(
           group->body(), group->flags(), zone, &sensitive, depth + 1);
-      if (lowered == nullptr || sensitive.contains_lookaround ||
+      if (lowered == nullptr || sensitive.contains_lookbehind ||
           sensitive.contains_backreference) {
         return false;
       }
+      state->classes.contains_lookaround |= sensitive.contains_lookaround;
       state->classes.contains_decoder |= sensitive.contains_decoder;
       state->classes.contains_forward_dispatch |=
           sensitive.contains_forward_dispatch;
@@ -895,7 +896,7 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
       state->used_extended_syntax = true;
       state->needs_byte_lowering |=
           lowered != group->body() || sensitive.contains_decoder ||
-          sensitive.contains_word_assertion;
+          sensitive.contains_word_assertion || sensitive.contains_lookaround;
       // The caller clears internal i; this child must stay case-sensitive.
       output->Add(lowered, zone);
       return true;
