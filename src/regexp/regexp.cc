@@ -620,6 +620,7 @@ RegExpTree* GetNode8ForwardClassByteTree(ZoneList<CharacterRange>* ranges,
 struct Node8CaseFoldState {
   bool used_extended_syntax = false;
   bool needs_byte_lowering = false;
+  Node8ComposedState classes;
 };
 
 bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zone,
@@ -683,12 +684,15 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
     return true;
   }
   if (auto code_point = GetSingletonClassCodePoint(tree, zone)) {
-    return append_code_point(*code_point, output);
+    if (*code_point != unibrow::Utf8::kBadChar) {
+      return append_code_point(*code_point, output);
+    }
   }
   ZoneList<CharacterRange>* class_ranges = nullptr;
+  bool negated_class = false;
   if (tree->IsClassRanges()) {
     auto* character_class = tree->AsClassRanges();
-    if (character_class->is_negated()) return false;
+    negated_class = character_class->is_negated();
     class_ranges = character_class->ranges(zone);
   } else if (tree->IsClassSetOperand()) {
     auto* operand = tree->AsClassSetOperand();
@@ -696,15 +700,22 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
     class_ranges = operand->ranges();
   } else if (tree->IsClassSetExpression()) {
     auto* expression = tree->AsClassSetExpression();
-    if (expression->is_negated() ||
-        expression->operation() !=
+    if (expression->operation() !=
             RegExpClassSetExpression::OperationType::kUnion ||
         expression->operands()->length() != 1) {
       return false;
     }
-    return AppendNode8CaseFoldedLiteral(
-        expression->operands()->first(), flags, zone, output, state, depth + 1,
-        in_quantifier_body);
+    auto* operand = expression->operands()->first();
+    if (!expression->is_negated()) {
+      return AppendNode8CaseFoldedLiteral(operand, flags, zone, output, state,
+                                         depth + 1, in_quantifier_body);
+    }
+    if (!operand->IsClassSetOperand() ||
+        operand->AsClassSetOperand()->has_strings()) {
+      return false;
+    }
+    class_ranges = operand->AsClassSetOperand()->ranges();
+    negated_class = true;
   }
   if (class_ranges != nullptr) {
     // A later unsupported node must leave the original tree untouched.
@@ -712,6 +723,18 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
     CharacterRange::Canonicalize(ranges);
     CharacterRange::AddUnicodeCaseEquivalents(ranges, zone);
     state->used_extended_syntax = true;
+    bool forward_class = negated_class;
+    for (CharacterRange range : *ranges) {
+      forward_class |= range.Contains(unibrow::Utf8::kBadChar);
+    }
+    if (forward_class) {
+      auto* lowered = GetNode8ForwardClassByteTree(
+          ranges, negated_class, flags, &state->classes, zone);
+      if (lowered == nullptr) return false;
+      output->Add(lowered, zone);
+      state->needs_byte_lowering = true;
+      return true;
+    }
     if (ranges->is_empty() || ranges->last().to() <= 0x7f) {
       output->Add(zone->New<RegExpClassRanges>(
                       zone, ranges,
@@ -3068,6 +3091,11 @@ bool RegExpImpl::CompileIrregexpFromSource(
                               ? literals.first()
                               : zone.New<RegExpAlternative>(
                                     zone.New<ZoneList<RegExpTree*>>(literals, &zone));
+      // Do not retry an excluded scalar at one of its continuation bytes.
+      compile_data.node8_scalar_search = state.classes.contains_decoder;
+      compile_data.node8_decoder_sensitive =
+          state.classes.contains_decoder &&
+          Node8CanStartOnContinuation(compile_data.tree, &zone);
       // The new tree matches encoded bytes. Do not fold its bytes as Latin-1
       // or interpret them as Unicode units; observable flags remain on re_data.
       flags &= ~(RegExpFlag::kIgnoreCase | RegExpFlag::kUnicode |

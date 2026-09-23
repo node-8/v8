@@ -2665,8 +2665,13 @@ bool RegExpParserImpl<CharT>::TryParseCharacterClassEscape(
     case 'S':
     case 'w':
     case 'W':
+      // Default node-8 Unicode matching closes word characters before
+      // complementing them, independently of the legacy grammar flag.
       CharacterRange::AddClassEscape(static_cast<StandardCharacterSet>(next),
-                                     ranges, add_unicode_case_equivalents,
+                                     ranges,
+                                     add_unicode_case_equivalents ||
+                                         (v8_flags.utf8_string_semantics &&
+                                          ignore_case()),
                                      zone);
       Advance(2);
       return true;
