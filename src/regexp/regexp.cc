@@ -719,7 +719,9 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
     auto* quantifier = tree->AsQuantifier();
     if (state->quantifier_count != 0 ||
         (!quantifier->is_greedy() && !quantifier->is_non_greedy()) ||
-        quantifier->min() > 3 || quantifier->max() != RegExpTree::kInfinity) {
+        quantifier->min() > 3 ||
+        (quantifier->max() != RegExpTree::kInfinity &&
+         (quantifier->max() < 1 || quantifier->max() > 3))) {
       return false;
     }
     if (++depth > 100) return false;
