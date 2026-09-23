@@ -737,21 +737,28 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
         body = capture->body();
       }
     }
-    std::optional<base::uc32> code_point;
-    if (body->IsAtom()) {
-      auto data = body->AsAtom()->data();
-      if (data.length() != 1 || (data[0] >= 0xd800 && data[0] <= 0xdfff)) {
-        return false;
-      }
-      code_point = data[0];
-    } else {
-      code_point = GetSingletonClassCodePoint(body, zone);
-    }
-    if (!code_point) return false;
     ZoneList<RegExpTree*> lowered_body(1, zone);
     // Keep ASCII and mixed closures on their existing loop/emission paths.
-    if (!append_code_point(*code_point, &lowered_body, true)) return false;
-    RegExpTree* repeated_body = lowered_body.first();
+    if (body->IsAtom()) {
+      auto data = body->AsAtom()->data();
+      if (data.empty()) return false;
+      for (base::uc32 code_point : data) {
+        if ((code_point >= 0xd800 && code_point <= 0xdfff) ||
+            !append_code_point(code_point, &lowered_body, true)) {
+          return false;
+        }
+      }
+    } else {
+      auto code_point = GetSingletonClassCodePoint(body, zone);
+      if (!code_point || !append_code_point(*code_point, &lowered_body, true)) {
+        return false;
+      }
+    }
+    RegExpTree* repeated_body =
+        lowered_body.length() == 1
+            ? lowered_body.first()
+            : zone->New<RegExpAlternative>(
+                  zone->New<ZoneList<RegExpTree*>>(lowered_body, zone));
     for (auto it = captures.rbegin(); it != captures.rend(); ++it) {
       auto* capture = zone->New<RegExpCapture>((*it)->index());
       capture->set_name((*it)->name());
