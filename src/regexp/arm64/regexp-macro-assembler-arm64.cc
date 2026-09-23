@@ -302,6 +302,7 @@ void RegExpMacroAssemblerARM64::PopCachedRegisters() {
 
 void RegExpMacroAssemblerARM64::CheckNotBackReferenceIgnoreCase(
     int start_reg, bool read_backward, bool unicode, Label* on_no_match) {
+  const bool utf8 = UseUtf8BackReference(unicode, read_backward);
   Label fallthrough;
 
   Register capture_start_offset = w10;
@@ -326,16 +327,19 @@ void RegExpMacroAssemblerARM64::CheckNotBackReferenceIgnoreCase(
   __ CompareAndBranch(capture_length, Operand(0), eq, &fallthrough);
 
   // Check that there are enough characters left in the input.
-  if (read_backward) {
-    __ Add(w12, string_start_minus_one(), capture_length);
-    __ Cmp(current_input_offset(), w12);
-    BranchOrBacktrack(le, on_no_match);
-  } else {
-    __ Cmn(capture_length, current_input_offset());
-    BranchOrBacktrack(gt, on_no_match);
+  // UTF-8 folds can consume fewer bytes than the capture.
+  if (!utf8) {
+    if (read_backward) {
+      __ Add(w12, string_start_minus_one(), capture_length);
+      __ Cmp(current_input_offset(), w12);
+      BranchOrBacktrack(le, on_no_match);
+    } else {
+      __ Cmn(capture_length, current_input_offset());
+      BranchOrBacktrack(gt, on_no_match);
+    }
   }
 
-  if (mode() == LATIN1) {
+  if (mode() == LATIN1 && !utf8) {
     Label success;
     Label fail;
     Label loop_check;
@@ -401,7 +405,7 @@ void RegExpMacroAssemblerARM64::CheckNotBackReferenceIgnoreCase(
       __ Check(le, AbortReason::kOffsetOutOfRange);
     }
   } else {
-    DCHECK(mode() == UC16);
+    DCHECK(mode() == UC16 || utf8);
     int argument_count = 4;
 
     PushCachedRegisters();
@@ -423,12 +427,17 @@ void RegExpMacroAssemblerARM64::CheckNotBackReferenceIgnoreCase(
       __ Sub(x1, x1, Operand(capture_length, SXTW));
     }
     // Isolate.
-    __ Mov(x3, ExternalReference::isolate_address(isolate()));
+    if (utf8) {
+      __ Mov(x3, input_end());
+    } else {
+      __ Mov(x3, ExternalReference::isolate_address(isolate()));
+    }
 
     {
       AllowExternalCallThatCantCauseGC scope(masm_.get());
       ExternalReference function =
-          unicode
+          utf8 ? ExternalReference::re_case_insensitive_compare_wtf8()
+          : unicode
               ? ExternalReference::re_case_insensitive_compare_unicode()
               : ExternalReference::re_case_insensitive_compare_non_unicode();
       CallCFunctionFromIrregexpCode(function, argument_count);
@@ -438,6 +447,7 @@ void RegExpMacroAssemblerARM64::CheckNotBackReferenceIgnoreCase(
     // x0 is one of the registers used as a cache so it must be tested before
     // the cache is restored.
     __ Cmp(x0, 0);
+    if (utf8) __ Mov(capture_length, w0);
     PopCachedRegisters();
     BranchOrBacktrack(eq, on_no_match);
 

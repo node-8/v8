@@ -229,6 +229,7 @@ void RegExpMacroAssemblerIA32::PopCallerSavedRegisters() {
 
 void RegExpMacroAssemblerIA32::CheckNotBackReferenceIgnoreCase(
     int start_reg, bool read_backward, bool unicode, Label* on_no_match) {
+  const bool utf8 = UseUtf8BackReference(unicode, read_backward);
   Label fallthrough;
   __ mov(edx, register_location(start_reg));  // Index of start of capture
   __ mov(ebx, register_location(start_reg + 1));  // Index of end of capture
@@ -240,18 +241,21 @@ void RegExpMacroAssemblerIA32::CheckNotBackReferenceIgnoreCase(
   __ j(equal, &fallthrough);
 
   // Check that there are sufficient characters left in the input.
-  if (read_backward) {
-    __ mov(eax, Operand(ebp, kStringStartMinusOneOffset));
-    __ add(eax, ebx);
-    __ cmp(edi, eax);
-    BranchOrBacktrack(less_equal, on_no_match);
-  } else {
-    __ mov(eax, edi);
-    __ add(eax, ebx);
-    BranchOrBacktrack(greater, on_no_match);
+  // UTF-8 folds can consume fewer bytes than the capture.
+  if (!utf8) {
+    if (read_backward) {
+      __ mov(eax, Operand(ebp, kStringStartMinusOneOffset));
+      __ add(eax, ebx);
+      __ cmp(edi, eax);
+      BranchOrBacktrack(less_equal, on_no_match);
+    } else {
+      __ mov(eax, edi);
+      __ add(eax, ebx);
+      BranchOrBacktrack(greater, on_no_match);
+    }
   }
 
-  if (mode() == LATIN1) {
+  if (mode() == LATIN1 && !utf8) {
     Label success;
     Label fail;
     Label loop_increment;
@@ -321,7 +325,7 @@ void RegExpMacroAssemblerIA32::CheckNotBackReferenceIgnoreCase(
       __ sub(edi, register_location(start_reg + 1));
     }
   } else {
-    DCHECK(mode() == UC16);
+    DCHECK(mode() == UC16 || utf8);
     // Save registers before calling C function.
     __ push(esi);
     __ push(edi);
@@ -338,8 +342,12 @@ void RegExpMacroAssemblerIA32::CheckNotBackReferenceIgnoreCase(
     //   Isolate* isolate.
 
     // Set isolate.
-    __ mov(Operand(esp, 3 * kSystemPointerSize),
-           Immediate(ExternalReference::isolate_address(isolate())));
+    if (utf8) {
+      __ mov(Operand(esp, 3 * kSystemPointerSize), esi);
+    } else {
+      __ mov(Operand(esp, 3 * kSystemPointerSize),
+             Immediate(ExternalReference::isolate_address(isolate())));
+    }
     // Set byte_length.
     __ mov(Operand(esp, 2 * kSystemPointerSize), ebx);
     // Set byte_offset2.
@@ -358,7 +366,8 @@ void RegExpMacroAssemblerIA32::CheckNotBackReferenceIgnoreCase(
     {
       AllowExternalCallThatCantCauseGC scope(masm_.get());
       ExternalReference compare =
-          unicode
+          utf8 ? ExternalReference::re_case_insensitive_compare_wtf8()
+          : unicode
               ? ExternalReference::re_case_insensitive_compare_unicode()
               : ExternalReference::re_case_insensitive_compare_non_unicode();
       CallCFunctionFromIrregexpCode(compare, argument_count);
@@ -376,7 +385,7 @@ void RegExpMacroAssemblerIA32::CheckNotBackReferenceIgnoreCase(
     if (read_backward) {
       __ sub(edi, ebx);
     } else {
-      __ add(edi, ebx);
+      __ add(edi, utf8 ? eax : ebx);
     }
   }
   __ bind(&fallthrough);

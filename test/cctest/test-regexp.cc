@@ -2,17 +2,79 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <string>
+#include <string_view>
+
 #include "include/v8-function.h"
 #include "include/v8-regexp.h"
 #include "src/api/api-inl.h"
 #include "src/execution/frames-inl.h"
+#include "src/flags/flags.h"
 #include "src/objects/string-inl.h"
+#include "src/regexp/regexp-macro-assembler.h"
 #include "src/regexp/regexp-utils.h"
 #include "test/cctest/cctest.h"
 #include "test/cctest/heap/heap-utils.h"
 #include "test/common/flag-utils.h"
 
 using namespace v8;
+
+#ifdef V8_INTL_SUPPORT
+TEST(Node8Wtf8ForwardBackReferenceCompare) {
+  CcTest::InitializeVM();
+  HandleScope scope(CcTest::isolate());
+  CHECK_EQ(i::v8_flags.utf8_string_semantics ? 2 : 1,
+           v8_str("\xc3\xa9")->Length());
+  int checks = 0;
+  auto check = [&](std::string_view capture, std::string_view target,
+                   size_t expected) {
+    CHECK(!capture.empty());
+    ++checks;
+    const i::Address begin = reinterpret_cast<i::Address>(target.data());
+    CHECK_EQ(expected, i::RegExpMacroAssembler::CaseInsensitiveCompareWtf8(
+                           reinterpret_cast<i::Address>(capture.data()), begin,
+                           capture.size(), begin + target.size()));
+  };
+  for (char upper = 'A'; upper <= 'Z'; ++upper) {
+    char lower = upper + ('a' - 'A');
+    check({&upper, 1}, {&lower, 1}, 1);
+    check({&lower, 1}, {&upper, 1}, 1);
+  }
+  check("[", "{", 0);
+  check("@", "\x60", 0);
+  check("1", "1!", 1);
+  check("ab", "A", 0);
+  check("A", "", 0);
+  check("A", "ab", 1);
+  check({"a\0B", 3}, {"A\0b!", 4}, 3);
+  check("k", "\xe2\x84\xaa!", 3);
+  check("\xe2\x84\xaa", "k!", 1);
+  check("\xc5\xbf", "S!", 1);
+  check("s", "\xc5\xbf!", 2);
+  check("\xc3\xa9", "\xc3\x89!", 2);
+  check("\xcf\x83", "\xcf\x82!", 2);
+  check("\xf0\x90\x90\x80", "\xf0\x90\x90\xa8!", 4);
+  check("\xc3\x9f", "\xe1\xba\x9e!", 3);
+  check("\xc3\x9f", "ss", 0);
+  check("i", "\xc4\xb0", 0);
+  check("\xed\xa0\x80", "\xed\xa0\x80!", 3);
+  check("\xed\xa0\x80\xed\xb0\x80", "\xf0\x90\x80\x80", 0);
+  check("\xef\xbf\xbd", "\xe2\x80", 2);
+  check("\xe2\x80", "\xef\xbf\xbd!", 3);
+  check("\xe2\x80", "\xe2\x80\xa8", 0);
+  check("\xef\xbf\xbd", "\xc0\x80", 1);
+  check("\xc0\x80", "\xef\xbf\xbd\xef\xbf\xbd!", 6);
+  check("\xc0\x80", "\xef\xbf\xbd", 0);
+  check("k", {"\xe2\x84\xaa", 2}, 0);
+  check("\xe2\x84\xaa", {"k!", 1}, 1);
+  const std::string captured(4096, 'a');
+  const std::string target(4096, 'A');
+  check(captured, target, 4096);
+  check(captured, std::string_view(target).substr(0, 4095), 0);
+  CHECK_EQ(81, checks);
+  i::PrintF("node-8 forward fold helper: %d checks passed\n", checks);
+}
+#endif  // V8_INTL_SUPPORT
 
 namespace {
 

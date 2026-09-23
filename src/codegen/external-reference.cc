@@ -1150,6 +1150,9 @@ FUNCTION_REFERENCE(free_regexp_result_vector, RegExpResultVector::Free)
 FUNCTION_REFERENCE(re_case_insensitive_compare_unicode,
                    NativeRegExpMacroAssembler::CaseInsensitiveCompareUnicode)
 
+FUNCTION_REFERENCE(re_case_insensitive_compare_wtf8,
+                   RegExpMacroAssembler::CaseInsensitiveCompareWtf8)
+
 FUNCTION_REFERENCE(re_case_insensitive_compare_non_unicode,
                    NativeRegExpMacroAssembler::CaseInsensitiveCompareNonUnicode)
 

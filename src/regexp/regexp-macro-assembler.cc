@@ -10,6 +10,7 @@
 #include "src/regexp/regexp-macro-assembler-arch.h"
 #include "src/regexp/regexp-stack.h"
 #include "src/regexp/special-case.h"
+#include "src/strings/unicode-decoder.h"
 #include "src/strings/unicode-inl.h"
 
 #ifdef V8_INTL_SUPPORT
@@ -98,6 +99,63 @@ void RegExpMacroAssembler::AdvanceUtf8Position() {
   Bind(&one);
   AdvanceCurrentPosition(1);
   Bind(&done);
+}
+
+bool RegExpMacroAssembler::UseUtf8BackReference(bool unicode,
+                                                bool read_backward) const {
+#ifdef V8_INTL_SUPPORT
+  return v8_flags.utf8_string_semantics && mode() == LATIN1 && unicode &&
+         !read_backward;
+#else
+  return false;
+#endif
+}
+
+size_t RegExpMacroAssembler::CaseInsensitiveCompareWtf8(Address capture,
+                                                        Address current,
+                                                        size_t capture_length,
+                                                        Address end) {
+#ifdef V8_INTL_SUPPORT
+  DisallowGarbageCollection no_gc;
+  DCHECK_GT(capture_length, 0);
+  if (current >= end) return 0;
+  const auto* captured = reinterpret_cast<const uint8_t*>(capture);
+  const auto* target = reinterpret_cast<const uint8_t*>(current);
+  const size_t target_length = end - current;
+  size_t capture_position = 0, target_position = 0;
+  while (capture_position < capture_length) {
+    if (target_position == target_length) return 0;
+    uint32_t left = captured[capture_position++];
+    uint32_t right = target[target_position++];
+    // ASCII needs neither a decoder call nor Unicode table lookup.
+    if (left > 0x7f) {
+      Wtf8ByteCursor cursor({captured, capture_length},
+                            Wtf8ByteCursor::Policy::kInternalWtf8,
+                            capture_position - 1);
+      left = cursor.DecodeNext().code_point;
+      capture_position = cursor.position();
+    }
+    if (right > 0x7f) {
+      Wtf8ByteCursor cursor({target, target_length},
+                            Wtf8ByteCursor::Policy::kInternalWtf8,
+                            target_position - 1);
+      right = cursor.DecodeNext().code_point;
+      target_position = cursor.position();
+    }
+    if (left == right) continue;
+    if (left <= 0x7f && right <= 0x7f) {
+      left |= 0x20;
+      right |= 0x20;
+      if (left != right || left - 'a' > 'z' - 'a') return 0;
+    } else if (u_foldCase(left, U_FOLD_CASE_DEFAULT) !=
+               u_foldCase(right, U_FOLD_CASE_DEFAULT)) {
+      return 0;
+    }
+  }
+  return target_position;
+#else
+  UNREACHABLE();
+#endif
 }
 
 // static

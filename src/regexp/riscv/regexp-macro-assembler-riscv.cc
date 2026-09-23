@@ -249,6 +249,7 @@ bool RegExpMacroAssemblerRISCV::CheckCharacterNotInRangeArray(
 
 void RegExpMacroAssemblerRISCV::CheckNotBackReferenceIgnoreCase(
     int start_reg, bool read_backward, bool unicode, Label* on_no_match) {
+  const bool utf8 = UseUtf8BackReference(unicode, read_backward);
   Label fallthrough;
   __ LoadWord(a0, register_location(start_reg));  // Index of start of capture.
   __ LoadWord(a1,
@@ -260,17 +261,20 @@ void RegExpMacroAssemblerRISCV::CheckNotBackReferenceIgnoreCase(
   // Fall through in both cases.
   __ BranchShort(&fallthrough, eq, a1, Operand(zero_reg));
 
-  if (read_backward) {
-    __ LoadWord(t1, MemOperand(frame_pointer(), kStringStartMinusOneOffset));
-    __ AddWord(t1, t1, a1);
-    BranchOrBacktrack(on_no_match, le, current_input_offset(), Operand(t1));
-  } else {
-    __ AddWord(t1, a1, current_input_offset());
-    // Check that there are enough characters left in the input.
-    BranchOrBacktrack(on_no_match, gt, t1, Operand(zero_reg));
+  // UTF-8 folds can consume fewer bytes than the capture.
+  if (!utf8) {
+    if (read_backward) {
+      __ LoadWord(t1, MemOperand(frame_pointer(), kStringStartMinusOneOffset));
+      __ AddWord(t1, t1, a1);
+      BranchOrBacktrack(on_no_match, le, current_input_offset(), Operand(t1));
+    } else {
+      __ AddWord(t1, a1, current_input_offset());
+      // Check that there are enough characters left in the input.
+      BranchOrBacktrack(on_no_match, gt, t1, Operand(zero_reg));
+    }
   }
 
-  if (mode() == LATIN1) {
+  if (mode() == LATIN1 && !utf8) {
     Label success;
     Label fail;
     Label loop_check;
@@ -329,7 +333,7 @@ void RegExpMacroAssemblerRISCV::CheckNotBackReferenceIgnoreCase(
       __ SubWord(current_input_offset(), current_input_offset(), Operand(a2));
     }
   } else {
-    DCHECK(mode() == UC16);
+    DCHECK(mode() == UC16 || utf8);
 
     int argument_count = 4;
     __ PrepareCallCFunction(argument_count, a2);
@@ -356,12 +360,17 @@ void RegExpMacroAssemblerRISCV::CheckNotBackReferenceIgnoreCase(
       __ SubWord(a1, a1, Operand(s3));
     }
     // Isolate.
-    __ li(a3, Operand(ExternalReference::isolate_address(masm_->isolate())));
+    if (utf8) {
+      __ mv(a3, end_of_input_address());
+    } else {
+      __ li(a3, Operand(ExternalReference::isolate_address(masm_->isolate())));
+    }
 
     {
       AllowExternalCallThatCantCauseGC scope(masm_.get());
       ExternalReference function =
-          unicode
+          utf8 ? ExternalReference::re_case_insensitive_compare_wtf8()
+          : unicode
               ? ExternalReference::re_case_insensitive_compare_unicode()
               : ExternalReference::re_case_insensitive_compare_non_unicode();
       CallCFunctionFromIrregexpCode(function, argument_count);
@@ -373,7 +382,8 @@ void RegExpMacroAssemblerRISCV::CheckNotBackReferenceIgnoreCase(
     if (read_backward) {
       __ SubWord(current_input_offset(), current_input_offset(), Operand(s3));
     } else {
-      __ AddWord(current_input_offset(), current_input_offset(), Operand(s3));
+      __ AddWord(current_input_offset(), current_input_offset(),
+                 Operand(utf8 ? a0 : s3));
     }
   }
 

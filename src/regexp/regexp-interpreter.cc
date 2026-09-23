@@ -7,6 +7,7 @@
 #include "src/regexp/regexp-interpreter.h"
 
 #include <limits>
+#include <type_traits>
 
 #include "src/base/small-vector.h"
 #include "src/base/strings.h"
@@ -914,6 +915,25 @@ IrregexpInterpreter::Result RawMatch(
       int from = registers[start_reg];
       int len = registers[start_reg + 1] - from;
       if (from >= 0 && len > 0) {
+#ifdef V8_INTL_SUPPORT
+        if constexpr (std::is_same_v<Char, uint8_t>) {
+          if (v8_flags.utf8_string_semantics) {
+            // A subject is at most String::kMaxLength (which fits in int).
+            int consumed = static_cast<int>(
+                RegExpMacroAssembler::CaseInsensitiveCompareWtf8(
+                    reinterpret_cast<Address>(subject.begin() + from),
+                    reinterpret_cast<Address>(subject.begin() + current), len,
+                    reinterpret_cast<Address>(subject.end())));
+            if (consumed == 0) {
+              SET_PC_FROM_OFFSET(on_not_equal);
+              DISPATCH();
+            }
+            ADVANCE_CURRENT_POSITION(consumed);
+            ADVANCE();
+            DISPATCH();
+          }
+        }
+#endif
         if (current + len > subject.length() ||
             !BackRefMatchesNoCase(isolate, from, current, len, subject, true)) {
           SET_PC_FROM_OFFSET(on_not_equal);

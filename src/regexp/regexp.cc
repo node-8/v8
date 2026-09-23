@@ -491,6 +491,7 @@ struct Node8ComposedState {
   bool contains_decoder = false;
   bool contains_lookbehind = false;
   bool contains_backreference = false;
+  bool contains_folded_backreference = false;
   bool contains_forward_dispatch = false;
 };
 
@@ -627,6 +628,68 @@ struct Node8CaseFoldState {
   bool needs_byte_lowering = false;
   Node8ComposedState classes;
 };
+
+// Retain the old byte comparison only when every possible captured byte has a
+// closed ASCII fold. In particular, case-sensitive k/s captures can still be
+// referenced against Kelvin/long-s under a later i scope. Bound compile work;
+// unknown or recursive capture bodies conservatively use Unicode comparison.
+bool Node8CaptureHasClosedAsciiFolds(RegExpTree* tree, Zone* zone,
+                                     int* budget) {
+  if (--*budget < 0) return false;
+  if (tree->IsAtom()) {
+    for (base::uc16 unit : tree->AsAtom()->data()) {
+      if (--*budget < 0) return false;
+      if (unit > 0x7f || (unit | 0x20) == 'k' || (unit | 0x20) == 's') {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (tree->IsClassRanges()) {
+    auto* character_class = tree->AsClassRanges();
+    if (character_class->is_negated()) return false;
+    for (CharacterRange range : *character_class->ranges(zone)) {
+      if (--*budget < 0) return false;
+      if (range.to() > 0x7f || range.Contains('k') || range.Contains('K') ||
+          range.Contains('s') || range.Contains('S')) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (tree->IsEmpty() || tree->IsAssertion() || tree->IsLookaround())
+    return true;
+  if (tree->IsCapture()) {
+    return Node8CaptureHasClosedAsciiFolds(tree->AsCapture()->body(), zone,
+                                           budget);
+  }
+  if (tree->IsGroup()) {
+    return Node8CaptureHasClosedAsciiFolds(tree->AsGroup()->body(), zone,
+                                           budget);
+  }
+  if (tree->IsQuantifier()) {
+    return Node8CaptureHasClosedAsciiFolds(tree->AsQuantifier()->body(), zone,
+                                           budget);
+  }
+  if (tree->IsText()) {
+    for (const auto& element : *tree->AsText()->elements()) {
+      if (!Node8CaptureHasClosedAsciiFolds(element.tree(), zone, budget)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (tree->IsAlternative() || tree->IsDisjunction()) {
+    auto* children = tree->IsAlternative()
+                         ? tree->AsAlternative()->nodes()
+                         : tree->AsDisjunction()->alternatives();
+    for (auto* child : *children) {
+      if (!Node8CaptureHasClosedAsciiFolds(child, zone, budget)) return false;
+    }
+    return true;
+  }
+  return false;
+}
 
 bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zone,
                                  ZoneList<RegExpTree*>* output,
@@ -832,6 +895,22 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
     state->used_extended_syntax = true;
     return true;
   }
+  if (tree->IsBackReference()) {
+    output->Add(zone->New<RegExpGroup>(
+                    tree, RegExpFlag::kIgnoreCase | RegExpFlag::kUnicode),
+                zone);
+    state->classes.contains_backreference = true;
+    state->classes.contains_folded_backreference = true;
+    int budget = 100;
+    for (auto* capture : *tree->AsBackReference()->captures()) {
+      if (!Node8CaptureHasClosedAsciiFolds(capture->body(), zone, &budget)) {
+        state->needs_byte_lowering = true;
+        break;
+      }
+    }
+    state->used_extended_syntax = true;
+    return true;
+  }
   if (tree->IsCapture()) {
     auto* capture = tree->AsCapture();
     ZoneList<RegExpTree*> body(4, zone);
@@ -888,6 +967,8 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
       state->classes.contains_lookaround |= sensitive.contains_lookaround;
       state->classes.contains_lookbehind |= sensitive.contains_lookbehind;
       state->classes.contains_backreference |= sensitive.contains_backreference;
+      state->classes.contains_folded_backreference |=
+          sensitive.contains_folded_backreference;
       state->classes.contains_decoder |= sensitive.contains_decoder;
       state->classes.contains_forward_dispatch |=
           sensitive.contains_forward_dispatch;
@@ -3188,12 +3269,14 @@ bool RegExpImpl::CompileIrregexpFromSource(
         GetNode8ComposedLiteralByteTree(original_tree, flags, &zone, &state);
     const bool scalar_search =
         state.contains_decoder ||
-        ((state.contains_lookaround || state.contains_word_assertion) &&
+        ((state.contains_lookaround || state.contains_word_assertion ||
+          state.contains_folded_backreference) &&
          original_tree->min_match() == 0);
     if (byte_tree != nullptr &&
         !(state.contains_decoder &&
           (state.contains_lookbehind || state.contains_backreference)) &&
         !(state.contains_forward_dispatch && state.contains_lookbehind) &&
+        !(state.contains_folded_backreference && state.contains_lookbehind) &&
         (byte_tree != original_tree || scalar_search) &&
         !compile_data.node8_pattern_has_malformed) {
       compile_data.tree = byte_tree;
@@ -3211,17 +3294,18 @@ bool RegExpImpl::CompileIrregexpFromSource(
     Node8CaseFoldState state;
     const bool lowered = AppendNode8CaseFoldedLiteral(
         original_tree, flags, &zone, &literals, &state);
-    const bool scalar_search =
-        state.classes.contains_decoder ||
-        ((state.classes.contains_lookaround ||
-          state.classes.contains_word_assertion) &&
-         original_tree->min_match() == 0);
+    const bool scalar_search = state.classes.contains_decoder ||
+                               ((state.classes.contains_lookaround ||
+                                 state.classes.contains_word_assertion ||
+                                 state.classes.contains_folded_backreference) &&
+                                original_tree->min_match() == 0);
     if (lowered && !literals.is_empty() &&
         !(state.classes.contains_decoder &&
           state.classes.contains_backreference) &&
         !(state.classes.contains_lookbehind &&
           (state.classes.contains_decoder ||
-           state.classes.contains_forward_dispatch)) &&
+           state.classes.contains_forward_dispatch ||
+           state.classes.contains_folded_backreference)) &&
         !compile_data.node8_pattern_has_malformed &&
         // Preserve the original matching code for newly admitted ASCII-safe
         // compositions; existing pure-literal lowering remains unchanged.

@@ -275,6 +275,12 @@ class RegExpMacroAssembler {
                                            size_t byte_length,
                                            Isolate* isolate);
 
+  bool UseUtf8BackReference(bool unicode, bool read_backward) const;
+  // Compare a nonempty capture against a bounded forward WTF-8 stream.
+  // Return consumed target bytes, or zero on mismatch. Does not allocate.
+  V8_EXPORT_PRIVATE static size_t CaseInsensitiveCompareWtf8(
+      Address capture, Address current, size_t capture_length, Address end);
+
   // `raw_byte_array` is a ByteArray containing a set of character ranges,
   // where ranges are encoded as uint16_t elements:
   //
