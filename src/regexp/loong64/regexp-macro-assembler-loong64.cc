@@ -889,11 +889,15 @@ DirectHandle<HeapObject> RegExpMacroAssemblerLOONG64::GetCode(
           __ Branch(&exit_label_, eq, current_input_offset(),
                     Operand(zero_reg));
           // Advance current position after a zero-length match.
-          Label advance;
-          __ bind(&advance);
-          __ Add_d(current_input_offset(), current_input_offset(),
-                   Operand((mode() == UC16) ? 2 : 1));
-          if (global_unicode()) CheckNotInSurrogatePair(0, &advance);
+          if (global_utf8()) {
+            AdvanceUtf8Position();
+          } else {
+            Label advance;
+            __ bind(&advance);
+            __ Add_d(current_input_offset(), current_input_offset(),
+                     Operand((mode() == UC16) ? 2 : 1));
+            if (global_unicode()) CheckNotInSurrogatePair(0, &advance);
+          }
         }
 
         __ bind(&reload_string_start_minus_one);

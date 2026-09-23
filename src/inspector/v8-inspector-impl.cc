@@ -107,8 +107,8 @@ v8::MaybeLocal<v8::Value> V8InspectorImpl::compileAndRunInternalScript(
 }
 
 v8::MaybeLocal<v8::Script> V8InspectorImpl::compileScript(
-    v8::Local<v8::Context> context, const String16& code,
-    const String16& fileName) {
+    v8::Local<v8::Context> context, const String8& code,
+    const String8& fileName) {
   v8::ScriptOrigin origin(toV8String(m_isolate, fileName), 0, 0, false);
   v8::ScriptCompiler::Source source(toV8String(m_isolate, code), origin);
   return v8::ScriptCompiler::Compile(context, &source,
@@ -351,10 +351,10 @@ unsigned V8InspectorImpl::exceptionThrown(
   unsigned exceptionId = nextExceptionId();
   std::unique_ptr<V8ConsoleMessage> consoleMessage =
       V8ConsoleMessage::createForException(
-          m_client->currentTimeMS(), toString16(detailedMessage),
-          toString16(url), lineNumber, columnNumber, std::move(stackTraceImpl),
-          scriptId, m_isolate, toString16(message),
-          InspectedContext::contextId(context), exception, exceptionId);
+          m_client->currentTimeMS(), toString8(detailedMessage), toString8(url),
+          lineNumber, columnNumber, std::move(stackTraceImpl), scriptId,
+          m_isolate, toString8(message), InspectedContext::contextId(context),
+          exception, exceptionId);
   ensureConsoleMessageStorage(groupId)->addMessage(std::move(consoleMessage));
   return exceptionId;
 }
@@ -367,7 +367,7 @@ void V8InspectorImpl::exceptionRevoked(v8::Local<v8::Context> context,
 
   std::unique_ptr<V8ConsoleMessage> consoleMessage =
       V8ConsoleMessage::createForRevokedException(
-          m_client->currentTimeMS(), toString16(message), exceptionId);
+          m_client->currentTimeMS(), toString8(message), exceptionId);
   ensureConsoleMessageStorage(groupId)->addMessage(std::move(consoleMessage));
 }
 
@@ -391,7 +391,7 @@ void V8InspectorImpl::externalAsyncTaskFinished(const V8StackTraceId& parent) {
 void V8InspectorImpl::asyncTaskScheduled(StringView taskName, void* task,
                                          bool recurring) {
   if (!task) return;
-  m_debugger->asyncTaskScheduled(taskName, task, recurring);
+  m_debugger->asyncTaskScheduled(toString8(taskName), task, recurring);
 }
 
 void V8InspectorImpl::asyncTaskCanceled(void* task) {

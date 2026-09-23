@@ -309,16 +309,23 @@ class RegExpMacroAssembler {
     NOT_GLOBAL,
     GLOBAL_NO_ZERO_LENGTH_CHECK,
     GLOBAL,
-    GLOBAL_UNICODE
+    GLOBAL_UNICODE,
+    GLOBAL_UTF8
   };
   // Set whether the regular expression has the global flag.  Exiting due to
   // a failure in a global regexp may still mean success overall.
   inline virtual void set_global_mode(GlobalMode mode) { global_mode_ = mode; }
   inline bool global() const { return global_mode_ != NOT_GLOBAL; }
   inline bool global_with_zero_length_check() const {
-    return global_mode_ == GLOBAL || global_mode_ == GLOBAL_UNICODE;
+    return global_mode_ == GLOBAL || global_mode_ == GLOBAL_UNICODE ||
+           global_mode_ == GLOBAL_UTF8;
   }
   inline bool global_unicode() const { return global_mode_ == GLOBAL_UNICODE; }
+  inline bool global_utf8() const { return global_mode_ == GLOBAL_UTF8; }
+
+  // Advance a known in-bounds LATIN1 byte position by one WTF-8 maximal
+  // subpart. Clobbers the loaded character; does not allocate or call C++.
+  void AdvanceUtf8Position();
 
   static Address word_character_map_address() {
     return reinterpret_cast<Address>(&word_character_map_[0]);

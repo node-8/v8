@@ -52,12 +52,12 @@ class V8HeapProfilerAgentImpl : public protocol::HeapProfiler::Backend {
       std::unique_ptr<TakeHeapSnapshotCallback> callback) override;
 
   Response getObjectByHeapObjectId(
-      const String16& heapSnapshotObjectId, std::optional<String16> objectGroup,
+      const String8& heapSnapshotObjectId, std::optional<String8> objectGroup,
       std::unique_ptr<protocol::Runtime::RemoteObject>* result) override;
   Response addInspectedHeapObject(
-      const String16& inspectedHeapObjectId) override;
-  Response getHeapObjectId(const String16& objectId,
-                           String16* heapSnapshotObjectId) override;
+      const String8& inspectedHeapObjectId) override;
+  Response getHeapObjectId(const String8& objectId,
+                           String8* heapSnapshotObjectId) override;
 
   Response startSampling(
       std::optional<double> samplingInterval, std::optional<double> stackDepth,

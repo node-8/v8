@@ -91,7 +91,8 @@ v8_source_set("inspector_string_conversions") {
 
 v8_source_set("inspector") {
   deps = [
-    ":inspector_string_conversions",
+    "../..:cppgc_headers",
+    "../..:v8_internal_headers",
     "../..:v8_tracing",
     "../..:v8_version",
     "../../third_party/inspector_protocol:crdtp",
@@ -125,8 +126,8 @@ v8_source_set("inspector") {
     "remote-object-id.h",
     "search-util.cc",
     "search-util.h",
-    "string-16.cc",
-    "string-16.h",
+    "string-8.cc",
+    "string-8.h",
     "string-util.cc",
     "string-util.h",
     "test-interface.cc",

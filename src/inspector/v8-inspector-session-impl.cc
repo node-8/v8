@@ -169,7 +169,7 @@ V8InspectorSessionImpl::~V8InspectorSessionImpl() {
 }
 
 protocol::DictionaryValue* V8InspectorSessionImpl::agentState(
-    const String16& name) {
+    const String8& name) {
   protocol::DictionaryValue* state = m_state->getObject(name);
   if (!state) {
     std::unique_ptr<protocol::DictionaryValue> newState =
@@ -250,10 +250,10 @@ Response V8InspectorSessionImpl::findInjectedScript(
 }
 
 void V8InspectorSessionImpl::releaseObjectGroup(StringView objectGroup) {
-  releaseObjectGroup(toString16(objectGroup));
+  releaseObjectGroup(toString8(objectGroup));
 }
 
-void V8InspectorSessionImpl::releaseObjectGroup(const String16& objectGroup) {
+void V8InspectorSessionImpl::releaseObjectGroup(const String8& objectGroup) {
   int sessionId = m_sessionId;
   m_inspector->forEachContext(
       m_contextGroupId, [&objectGroup, &sessionId](InspectedContext* context) {
@@ -266,13 +266,13 @@ bool V8InspectorSessionImpl::unwrapObject(
     std::unique_ptr<StringBuffer>* error, StringView objectId,
     v8::Local<v8::Value>* object, v8::Local<v8::Context>* context,
     std::unique_ptr<StringBuffer>* objectGroup) {
-  String16 objectGroupString;
-  Response response = unwrapObject(toString16(objectId), object, context,
+  String8 objectGroupString;
+  Response response = unwrapObject(toString8(objectId), object, context,
                                    objectGroup ? &objectGroupString : nullptr);
   if (response.IsError()) {
     if (error) {
       const std::string& msg = response.Message();
-      *error = StringBufferFrom(String16::fromUTF8(msg.data(), msg.size()));
+      *error = StringBufferFrom(String8::fromUTF8(msg.data(), msg.size()));
     }
     return false;
   }
@@ -281,10 +281,10 @@ bool V8InspectorSessionImpl::unwrapObject(
   return true;
 }
 
-Response V8InspectorSessionImpl::unwrapObject(const String16& objectId,
+Response V8InspectorSessionImpl::unwrapObject(const String8& objectId,
                                               v8::Local<v8::Value>* object,
                                               v8::Local<v8::Context>* context,
-                                              String16* objectGroup) {
+                                              String8* objectGroup) {
   std::unique_ptr<RemoteObjectId> remoteId;
   Response response = RemoteObjectId::parse(objectId, &remoteId);
   if (!response.IsSuccess()) return response;
@@ -302,13 +302,13 @@ std::unique_ptr<protocol::Runtime::API::RemoteObject>
 V8InspectorSessionImpl::wrapObject(v8::Local<v8::Context> context,
                                    v8::Local<v8::Value> value,
                                    StringView groupName, bool generatePreview) {
-  return wrapObject(context, value, toString16(groupName), generatePreview);
+  return wrapObject(context, value, toString8(groupName), generatePreview);
 }
 
 std::unique_ptr<protocol::Runtime::RemoteObject>
 V8InspectorSessionImpl::wrapObject(v8::Local<v8::Context> context,
                                    v8::Local<v8::Value> value,
-                                   const String16& groupName,
+                                   const String8& groupName,
                                    bool generatePreview) {
   InjectedScript* injectedScript = nullptr;
   findInjectedScript(InspectedContext::contextId(context), injectedScript);
@@ -446,7 +446,7 @@ void V8InspectorSessionImpl::schedulePauseOnNextStatement(
   std::vector<uint8_t> cbor;
   ConvertToCBOR(breakDetails, &cbor);
   m_debuggerAgent->schedulePauseOnNextStatement(
-      toString16(breakReason),
+      toString8(breakReason),
       protocol::DictionaryValue::cast(
           protocol::Value::parseBinary(cbor.data(), cbor.size())));
 }
@@ -460,7 +460,7 @@ void V8InspectorSessionImpl::breakProgram(StringView breakReason,
   std::vector<uint8_t> cbor;
   ConvertToCBOR(breakDetails, &cbor);
   m_debuggerAgent->breakProgram(
-      toString16(breakReason),
+      toString8(breakReason),
       protocol::DictionaryValue::cast(
           protocol::Value::parseBinary(cbor.data(), cbor.size())));
 }
@@ -480,7 +480,7 @@ V8InspectorSessionImpl::searchInTextByLines(StringView text, StringView query,
                                             bool caseSensitive, bool isRegex) {
   // TODO(dgozman): search may operate on StringView and avoid copying |text|.
   std::vector<std::unique_ptr<protocol::Debugger::SearchMatch>> matches =
-      searchInTextByLinesImpl(m_inspector, toString16(text), toString16(query),
+      searchInTextByLinesImpl(m_inspector, toString8(text), toString8(query),
                               caseSensitive, isRegex);
   std::vector<std::unique_ptr<protocol::Debugger::API::SearchMatch>> result;
   for (size_t i = 0; i < matches.size(); ++i)
@@ -490,7 +490,7 @@ V8InspectorSessionImpl::searchInTextByLines(StringView text, StringView query,
 
 void V8InspectorSessionImpl::triggerPreciseCoverageDeltaUpdate(
     StringView occasion) {
-  m_profilerAgent->triggerPreciseCoverageDeltaUpdate(toString16(occasion));
+  m_profilerAgent->triggerPreciseCoverageDeltaUpdate(toString8(occasion));
 }
 
 V8InspectorSession::EvaluateResult V8InspectorSessionImpl::evaluate(

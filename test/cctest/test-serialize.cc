@@ -73,6 +73,7 @@
 #include "test/cctest/cctest.h"
 #include "test/cctest/heap/heap-utils.h"
 #include "test/cctest/setup-isolate-for-tests.h"
+#include "test/common/flag-utils.h"
 namespace v8 {
 namespace internal {
 
@@ -6835,6 +6836,135 @@ UNINITIALIZED_TEST(StaticRootsPredictableSnapshot) {
 }
 #endif  // defined(V8_COMPRESS_POINTERS_IN_SHARED_CAGE) &&
         // defined(V8_SHARED_RO_HEAP)
+
+namespace {
+
+void TestNode8TrimSnapshot(bool override_methods) {
+  FlagScope<bool> utf8(&v8_flags.utf8_string_semantics, true);
+  DisableEmbeddedBlobRefcounting();
+  v8::StartupData blob;
+  {
+    SnapshotCreatorParams params;
+    v8::SnapshotCreator creator(params.create_params);
+    v8::Isolate* isolate = creator.GetIsolate();
+    {
+      v8::HandleScope scope(isolate);
+      v8::Local<v8::Context> context = v8::Context::New(isolate);
+      v8::Context::Scope context_scope(context);
+      ExpectString("'\\u3000x\\u00a0'.trim()", "x");
+      CompileRun("var savedTrim = String.prototype.trim; savedTrim.marker = 42;");
+      if (override_methods) {
+        CompileRun(
+            "String.prototype.trim = function customTrim() { return 'custom'; };"
+            "String.prototype.trimStart = null;"
+            "Object.defineProperty(String.prototype, 'trimEnd', {"
+            "  get() { throw new Error('must not run during restoration'); },"
+            "  configurable: true"
+            "});"
+            "delete String.prototype.trimRight;");
+      }
+      creator.SetDefaultContext(context);
+    }
+    blob = creator.CreateBlob(v8::SnapshotCreator::FunctionCodeHandling::kClear);
+  }
+
+  v8::Isolate::CreateParams params;
+  params.snapshot_blob = &blob;
+  params.array_buffer_allocator = CcTest::array_buffer_allocator();
+  v8::Isolate* isolate = TestSerializer::NewIsolate(params);
+  {
+    v8::Isolate::Scope isolate_scope(isolate);
+    v8::HandleScope scope(isolate);
+    v8::Local<v8::Context> context = v8::Context::New(isolate);
+    v8::Context::Scope context_scope(context);
+    ExpectString("savedTrim.call('\\u3000x\\u00a0')", "x");
+    ExpectInt32("savedTrim.marker", 42);
+    if (override_methods) {
+      ExpectString("'x'.trim()", "custom");
+      ExpectTrue("String.prototype.trimStart === null");
+      ExpectString("'\\u3000x'.trimLeft()", "x");
+      ExpectTrue("typeof Object.getOwnPropertyDescriptor("
+                 "String.prototype, 'trimEnd').get === 'function'");
+      ExpectTrue("!Object.hasOwn(String.prototype, 'trimRight')");
+    } else {
+      ExpectTrue("savedTrim === String.prototype.trim");
+      ExpectTrue("String.prototype.trimStart === String.prototype.trimLeft");
+      ExpectTrue("String.prototype.trimEnd === String.prototype.trimRight");
+      ExpectString("'\\u3000x'.trimStart()", "x");
+      ExpectString("'x\\u00a0'.trimEnd()", "x");
+    }
+  }
+  isolate->Dispose();
+  delete[] blob.data;
+  FreeCurrentEmbeddedBlob();
+}
+
+}  // namespace
+
+UNINITIALIZED_TEST(Node8TrimSnapshot) { TestNode8TrimSnapshot(false); }
+UNINITIALIZED_TEST(Node8TrimSnapshotOverrides) { TestNode8TrimSnapshot(true); }
+
+UNINITIALIZED_TEST(Node8TrimStockSnapshotCachedReferences) {
+  DisableEmbeddedBlobRefcounting();
+  v8::StartupData blob;
+  {
+    FlagScope<bool> stock(&v8_flags.utf8_string_semantics, false);
+    SnapshotCreatorParams params;
+    v8::SnapshotCreator creator(params.create_params);
+    v8::Isolate* isolate = creator.GetIsolate();
+    {
+      v8::HandleScope scope(isolate);
+      v8::Local<v8::Context> context = v8::Context::New(isolate);
+      v8::Context::Scope context_scope(context);
+      ExpectInt32("'\\u00e9'.length", 1);
+      CompileRun(
+          "var savedTrim = String.prototype.trim;"
+          "var savedTrimStart = String.prototype.trimStart;"
+          "var savedTrimEnd = String.prototype.trimEnd;"
+          "var cachedTrim = Function.prototype.call.bind(savedTrim);"
+          "var cachedTrimStart = Function.prototype.call.bind(savedTrimStart);"
+          "var cachedTrimEnd = Function.prototype.call.bind(savedTrimEnd);"
+          "savedTrim.marker = 42;"
+          "Object.freeze(savedTrim);");
+      creator.SetDefaultContext(context);
+    }
+    blob = creator.CreateBlob(v8::SnapshotCreator::FunctionCodeHandling::kKeep);
+  }
+
+  {
+    FlagScope<bool> utf8(&v8_flags.utf8_string_semantics, true);
+    v8::Isolate::CreateParams params;
+    params.snapshot_blob = &blob;
+    params.array_buffer_allocator = CcTest::array_buffer_allocator();
+    v8::Isolate* isolate = TestSerializer::NewIsolate(params);
+    {
+      v8::Isolate::Scope isolate_scope(isolate);
+      v8::HandleScope scope(isolate);
+      v8::Local<v8::Context> context = v8::Context::New(isolate);
+      v8::Context::Scope context_scope(context);
+      ExpectInt32("'\\u00e9'.length", 2);
+      ExpectTrue("savedTrim === String.prototype.trim");
+      ExpectTrue("savedTrimStart === String.prototype.trimStart");
+      ExpectTrue("savedTrimStart === String.prototype.trimLeft");
+      ExpectTrue("savedTrimEnd === String.prototype.trimEnd");
+      ExpectTrue("savedTrimEnd === String.prototype.trimRight");
+      ExpectTrue("Object.isFrozen(savedTrim)");
+      ExpectInt32("savedTrim.marker", 42);
+      ExpectString("cachedTrim('\\u3000x\\u00a0')", "x");
+      ExpectString("cachedTrimStart('\\u3000x ')", "x ");
+      ExpectString("cachedTrimEnd(' x\\u00a0')", " x");
+      ExpectTrue("cachedTrim('\\u0120') === '\\u0120'");
+      ExpectTrue("cachedTrimEnd('\\u0120') === '\\u0120'");
+      ExpectString("savedTrim.name", "trim");
+      ExpectString("savedTrimStart.name", "trimStart");
+      ExpectString("savedTrimEnd.name", "trimEnd");
+      ExpectInt32("savedTrim.length", 0);
+    }
+    isolate->Dispose();
+  }
+  delete[] blob.data;
+  FreeCurrentEmbeddedBlob();
+}
 
 }  // namespace internal
 }  // namespace v8

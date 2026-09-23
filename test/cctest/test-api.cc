@@ -23993,6 +23993,19 @@ void CheckMagicComments(v8::Isolate* isolate, Local<T> unbound_script,
   } else {
     CHECK(unbound_script->GetSourceMappingURL()->IsUndefined());
   }
+  if (i::v8_flags.utf8_string_semantics) {
+    // Re-encoding a legacy two-byte string can hide incorrect heap storage.
+    auto check_bytes = [isolate](Local<Value> value, const char* expected) {
+      if (expected == nullptr) return;
+      String::ValueView view(isolate, value.As<String>());
+      CHECK(view.is_one_byte());
+      CHECK_EQ(view.length(), strlen(expected));
+      CHECK_EQ(0, memcmp(view.data8(), expected, view.length()));
+    };
+    check_bytes(unbound_script->GetSourceURL(), expected_source_url);
+    check_bytes(unbound_script->GetSourceMappingURL(),
+                expected_source_mapping_url);
+  }
 }
 
 void SourceURLHelper(v8::Isolate* isolate, const char* source_text,
@@ -24121,6 +24134,50 @@ TEST(ScriptSourceURLAndSourceMappingURL) {
       "function foo() {}\n"
       "//# sourceMappingURL=  data:application/json,{\"version\":3}  \n",
       nullptr, "data:application/json,{\"version\":3}");
+}
+
+TEST(MagicCommentCompileHintControls) {
+  for (const char* hints : {"wBuC", "\u03c0", "!"}) {
+    LocalContext env;
+    v8::HandleScope scope(env.isolate());
+    std::string code = "//# functionsCalledOnLoad=" + std::string(hints) +
+                       "\nfunction test_function_1(test_param1) {}\n"
+                       "let test_function_2 = (test_param2) => {}";
+    v8::ScriptCompiler::Source source(v8_str(code.c_str()));
+    auto script = v8::ScriptCompiler::Compile(
+                      env.local(), &source,
+                      v8::ScriptCompiler::kFollowCompileHintsPerFunctionMagicComment)
+                      .ToLocalChecked();
+    CHECK(!script->Run(env.local()).IsEmpty());
+    for (const char* name : {"test_function_1", "test_function_2"}) {
+      auto function = i::Cast<i::JSFunction>(
+          v8::Utils::OpenDirectHandle(*CompileRun(name)));
+      bool compiled = function->code(CcTest::i_isolate())->builtin_id() !=
+                      i::Builtin::kCompileLazy;
+      CHECK_EQ(compiled, strcmp(hints, "wBuC") == 0);
+    }
+  }
+}
+
+TEST(UnicodeMagicCommentURLs) {
+  LocalContext env;
+  v8::Isolate* isolate = env.isolate();
+  v8::HandleScope scope(isolate);
+  for (const char* name : {"ascii.js", "\u00e9.js", "\u4e2d.js",
+                           "\U0001f600.js"}) {
+    std::string source = "42;\n//# sourceURL=" + std::string(name) +
+                         "\n//# sourceMappingURL=" + name;
+    SourceURLHelper(isolate, source.c_str(), name, name);
+    source = "//# sourceURL=ignored\n//# sourceMappingURL=ignored\n" +
+             source + " \t\n";
+    SourceURLHelper(isolate, source.c_str(), name, name);
+    source = "42;\n//@ sourceURL= \t" + std::string(name) +
+             " \t\n//@ sourceMappingURL= \t" + name + " \t\n";
+    SourceURLHelper(isolate, source.c_str(), name, name);
+    source += "//# sourceURL=invalid suffix\n"
+              "//# sourceMappingURL=invalid suffix\n";
+    SourceURLHelper(isolate, source.c_str(), nullptr, nullptr);
+  }
 }
 
 

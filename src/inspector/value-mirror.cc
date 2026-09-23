@@ -189,37 +189,43 @@ V8InternalValueType v8InternalValueTypeFrom(v8::Local<v8::Context> context,
 
 enum AbbreviateMode { kMiddle, kEnd };
 
-String16 abbreviateString(const String16& value, AbbreviateMode mode) {
+String8 abbreviateString(const String8& value, AbbreviateMode mode) {
   const size_t maxLength = 100;
-  if (value.length() <= maxLength) return value;
-  UChar ellipsis = static_cast<UChar>(0x2026);
+  v8::Isolate* isolate = v8::Isolate::GetCurrent();
+  size_t length = engineStringLength(isolate, value);
+  if (length <= maxLength) return value;
+  const char* ellipsis = "\xe2\x80\xa6";
+  auto byteOffset = [&](size_t offset) {
+    return value.completePrefix(protocolByteOffset(isolate, value, offset));
+  };
   if (mode == kMiddle) {
-    return String16::concat(
-        value.substring(0, maxLength / 2), String16(&ellipsis, 1),
-        value.substring(value.length() - maxLength / 2 + 1));
+    return String8::concat(
+        value.substring(0, byteOffset(maxLength / 2)), ellipsis,
+        value.substring(byteOffset(length - maxLength / 2 + 1)));
   }
-  return String16::concat(value.substring(0, maxLength - 1), ellipsis);
+  return String8::concat(value.substring(0, byteOffset(maxLength - 1)),
+                         ellipsis);
 }
 
-String16 descriptionForSymbol(v8::Local<v8::Context> context,
-                              v8::Local<v8::Symbol> symbol) {
+String8 descriptionForSymbol(v8::Local<v8::Context> context,
+                             v8::Local<v8::Symbol> symbol) {
   v8::Isolate* isolate = v8::Isolate::GetCurrent();
-  return String16::concat(
+  return String8::concat(
       "Symbol(",
       toProtocolStringWithTypeCheck(isolate, symbol->Description(isolate)),
       ")");
 }
 
-String16 descriptionForBigInt(v8::Local<v8::Context> context,
-                              v8::Local<v8::BigInt> value) {
+String8 descriptionForBigInt(v8::Local<v8::Context> context,
+                             v8::Local<v8::BigInt> value) {
   v8::Isolate* isolate = v8::Isolate::GetCurrent();
   v8::Local<v8::String> description =
       v8::debug::GetBigIntDescription(isolate, value);
   return toProtocolString(isolate, description);
 }
 
-String16 descriptionForPrimitiveType(v8::Local<v8::Context> context,
-                                     v8::Local<v8::Value> value) {
+String8 descriptionForPrimitiveType(v8::Local<v8::Context> context,
+                                    v8::Local<v8::Value> value) {
   if (value->IsUndefined()) return RemoteObject::TypeEnum::Undefined;
   if (value->IsNull()) return RemoteObject::SubtypeEnum::Null;
   if (value->IsBoolean()) {
@@ -231,9 +237,9 @@ String16 descriptionForPrimitiveType(v8::Local<v8::Context> context,
   UNREACHABLE();
 }
 
-String16 descriptionForRegExp(v8::Isolate* isolate,
-                              v8::Local<v8::RegExp> value) {
-  String16Builder description;
+String8 descriptionForRegExp(v8::Isolate* isolate,
+                             v8::Local<v8::RegExp> value) {
+  String8Builder description;
   description.append('/');
   description.append(toProtocolString(isolate, value->GetSource()));
   description.append('/');
@@ -300,12 +306,12 @@ v8::MaybeLocal<v8::Value> getErrorProperty(v8::Local<v8::Context> context,
 //     Error subclasses don't overwrite the "name" property.
 //   * The rest is the content of the "stack" property but only with the actual
 //     stack trace part.
-String16 descriptionForError(v8::Local<v8::Context> context,
-                             v8::Local<v8::Object> object) {
+String8 descriptionForError(v8::Local<v8::Context> context,
+                            v8::Local<v8::Object> object) {
   v8::Isolate* isolate = v8::Isolate::GetCurrent();
   v8::TryCatch tryCatch(isolate);
 
-  String16 name = toProtocolString(isolate, object->GetConstructorName());
+  String8 name = toProtocolString(isolate, object->GetConstructorName());
   {
     v8::Local<v8::Value> nameValue;
     if (getErrorProperty(context, object, toV8String(isolate, "name"))
@@ -319,33 +325,33 @@ String16 descriptionForError(v8::Local<v8::Context> context,
     }
   }
 
-  std::optional<String16> stack;
+  std::optional<String8> stack;
   {
     v8::Local<v8::Value> stackValue;
     if (getErrorProperty(context, object, toV8String(isolate, "stack"))
             .ToLocal(&stackValue) &&
         stackValue->IsString()) {
-      String16 stackString =
+      String8 stackString =
           toProtocolString(isolate, stackValue.As<v8::String>());
       size_t pos = stackString.find("\n    at ");
-      if (pos != String16::kNotFound) {
+      if (pos != String8::kNotFound) {
         stack = stackString.substring(pos);
       }
     }
   }
 
-  std::optional<String16> message;
+  std::optional<String8> message;
   {
     v8::Local<v8::Value> messageValue;
     if (getErrorProperty(context, object, toV8String(isolate, "message"))
             .ToLocal(&messageValue) &&
         messageValue->IsString()) {
-      String16 msg = toProtocolStringWithTypeCheck(isolate, messageValue);
+      String8 msg = toProtocolStringWithTypeCheck(isolate, messageValue);
       if (!msg.isEmpty()) message = msg;
     }
   }
 
-  String16 description = name;
+  String8 description = name;
   if (message.has_value() && message->length() > 0) {
     description += ": " + *message;
   }
@@ -356,52 +362,52 @@ String16 descriptionForError(v8::Local<v8::Context> context,
   return description;
 }
 
-String16 descriptionForObject(v8::Isolate* isolate,
-                              v8::Local<v8::Object> object) {
+String8 descriptionForObject(v8::Isolate* isolate,
+                             v8::Local<v8::Object> object) {
   return toProtocolString(isolate, object->GetConstructorName());
 }
 
-String16 descriptionForProxy(v8::Isolate* isolate, v8::Local<v8::Proxy> proxy) {
+String8 descriptionForProxy(v8::Isolate* isolate, v8::Local<v8::Proxy> proxy) {
   v8::Local<v8::Value> target = proxy->GetTarget();
   if (target->IsObject()) {
-    return String16::concat(
+    return String8::concat(
         "Proxy(", descriptionForObject(isolate, target.As<v8::Object>()), ")");
   }
-  return String16("Proxy");
+  return String8("Proxy");
 }
 
-String16 descriptionForDate(v8::Local<v8::Context> context,
-                            v8::Local<v8::Date> date) {
+String8 descriptionForDate(v8::Local<v8::Context> context,
+                           v8::Local<v8::Date> date) {
   v8::Isolate* isolate = v8::Isolate::GetCurrent();
   v8::Local<v8::String> description = v8::debug::GetDateDescription(date);
   return toProtocolString(isolate, description);
 }
 
-String16 descriptionForScopeList(v8::Local<v8::Array> list) {
-  return String16::concat(
-      "Scopes[", String16::fromInteger(static_cast<size_t>(list->Length())),
+String8 descriptionForScopeList(v8::Local<v8::Array> list) {
+  return String8::concat(
+      "Scopes[", String8::fromInteger(static_cast<size_t>(list->Length())),
       ']');
 }
 
-String16 descriptionForScope(v8::Local<v8::Context> context,
-                             v8::Local<v8::Object> object) {
+String8 descriptionForScope(v8::Local<v8::Context> context,
+                            v8::Local<v8::Object> object) {
   v8::Isolate* isolate = v8::Isolate::GetCurrent();
   v8::Local<v8::Value> value;
   if (!object->GetRealNamedProperty(context, toV8String(isolate, "description"))
            .ToLocal(&value)) {
-    return String16();
+    return String8();
   }
   return toProtocolStringWithTypeCheck(isolate, value);
 }
 
-String16 descriptionForCollection(v8::Isolate* isolate,
-                                  v8::Local<v8::Object> object, size_t length) {
-  String16 className = toProtocolString(isolate, object->GetConstructorName());
-  return String16::concat(className, '(', String16::fromInteger(length), ')');
+String8 descriptionForCollection(v8::Isolate* isolate,
+                                 v8::Local<v8::Object> object, size_t length) {
+  String8 className = toProtocolString(isolate, object->GetConstructorName());
+  return String8::concat(className, '(', String8::fromInteger(length), ')');
 }
 
 #if V8_ENABLE_WEBASSEMBLY
-String16 descriptionForWasmValueObject(
+String8 descriptionForWasmValueObject(
     v8::Local<v8::Context> context,
     v8::Local<v8::debug::WasmValueObject> object) {
   v8::Isolate* isolate = v8::Isolate::GetCurrent();
@@ -409,10 +415,10 @@ String16 descriptionForWasmValueObject(
 }
 #endif  // V8_ENABLE_WEBASSEMBLY
 
-String16 descriptionForEntry(v8::Local<v8::Context> context,
-                             v8::Local<v8::Object> object) {
+String8 descriptionForEntry(v8::Local<v8::Context> context,
+                            v8::Local<v8::Object> object) {
   v8::Isolate* isolate = v8::Isolate::GetCurrent();
-  String16 key;
+  String8 key;
   v8::Local<v8::Value> tmp;
   if (object->GetRealNamedProperty(context, toV8String(isolate, "key"))
           .ToLocal(&tmp)) {
@@ -422,15 +428,15 @@ String16 descriptionForEntry(v8::Local<v8::Context> context,
       int limit = 5;
       wrapper->buildEntryPreview(context, &limit, &limit, &preview);
       if (preview) {
-        key = preview->getDescription(String16());
+        key = preview->getDescription(String8());
         if (preview->getType() == RemoteObject::TypeEnum::String) {
-          key = String16::concat('\"', key, '\"');
+          key = String8::concat('\"', key, '\"');
         }
       }
     }
   }
 
-  String16 value;
+  String8 value;
   if (object->GetRealNamedProperty(context, toV8String(isolate, "value"))
           .ToLocal(&tmp)) {
     auto wrapper = ValueMirror::create(context, tmp);
@@ -439,9 +445,9 @@ String16 descriptionForEntry(v8::Local<v8::Context> context,
       int limit = 5;
       wrapper->buildEntryPreview(context, &limit, &limit, &preview);
       if (preview) {
-        value = preview->getDescription(String16());
+        value = preview->getDescription(String8());
         if (preview->getType() == RemoteObject::TypeEnum::String) {
-          value = String16::concat('\"', value, '\"');
+          value = String8::concat('\"', value, '\"');
         }
       }
     }
@@ -450,32 +456,32 @@ String16 descriptionForEntry(v8::Local<v8::Context> context,
   return key.length() ? ("{" + key + " => " + value + "}") : value;
 }
 
-String16 descriptionForFunction(v8::Local<v8::Function> value) {
+String8 descriptionForFunction(v8::Local<v8::Function> value) {
   v8::Isolate* isolate = v8::Isolate::GetCurrent();
   v8::Local<v8::String> description = v8::debug::GetFunctionDescription(value);
   return toProtocolString(isolate, description);
 }
 
-String16 descriptionForPrivateMethodList(v8::Local<v8::Array> list) {
-  return String16::concat(
+String8 descriptionForPrivateMethodList(v8::Local<v8::Array> list) {
+  return String8::concat(
       "PrivateMethods[",
-      String16::fromInteger(static_cast<size_t>(list->Length())), ']');
+      String8::fromInteger(static_cast<size_t>(list->Length())), ']');
 }
 
-String16 descriptionForPrivateMethod(v8::Local<v8::Context> context,
-                                     v8::Local<v8::Object> object) {
+String8 descriptionForPrivateMethod(v8::Local<v8::Context> context,
+                                    v8::Local<v8::Object> object) {
   v8::Isolate* isolate = v8::Isolate::GetCurrent();
   v8::Local<v8::Value> value;
   if (!object->GetRealNamedProperty(context, toV8String(isolate, "value"))
            .ToLocal(&value)) {
-    return String16();
+    return String8();
   }
   DCHECK(value->IsFunction());
   return descriptionForFunction(value.As<v8::Function>());
 }
 
-String16 descriptionForNumber(v8::Local<v8::Number> value,
-                              bool* unserializable) {
+String8 descriptionForNumber(v8::Local<v8::Number> value,
+                             bool* unserializable) {
   *unserializable = true;
   double rawValue = value->Value();
   if (std::isnan(rawValue)) return "NaN";
@@ -484,7 +490,7 @@ String16 descriptionForNumber(v8::Local<v8::Number> value,
     return std::signbit(rawValue) ? "-Infinity" : "Infinity";
   }
   *unserializable = false;
-  return String16::fromDouble(rawValue);
+  return String8::fromDouble(rawValue);
 }
 
 class ValueMirrorBase : public ValueMirror {
@@ -503,7 +509,7 @@ class ValueMirrorBase : public ValueMirror {
 class PrimitiveValueMirror final : public ValueMirrorBase {
  public:
   PrimitiveValueMirror(v8::Isolate* isolate, v8::Local<v8::Primitive> value,
-                       const String16& type)
+                       const String8& type)
       : ValueMirrorBase(isolate, value), m_type(type) {}
 
   Response buildRemoteObject(
@@ -536,7 +542,7 @@ class PrimitiveValueMirror final : public ValueMirrorBase {
   }
 
   void buildPropertyPreview(
-      v8::Local<v8::Context> context, const String16& name,
+      v8::Local<v8::Context> context, const String8& name,
       std::unique_ptr<PropertyPreview>* preview) const override {
     v8::Local<v8::Value> value = v8Value(v8::Isolate::GetCurrent());
     *preview = PropertyPreview::create()
@@ -596,8 +602,8 @@ class PrimitiveValueMirror final : public ValueMirrorBase {
   }
 
  private:
-  String16 m_type;
-  String16 m_subtype;
+  String8 m_type;
+  String8 m_subtype;
 };
 
 class NumberMirror final : public ValueMirrorBase {
@@ -611,7 +617,7 @@ class NumberMirror final : public ValueMirrorBase {
     v8::Local<v8::Number> value =
         v8Value(v8::Isolate::GetCurrent()).As<v8::Number>();
     bool unserializable = false;
-    String16 descriptionValue = descriptionForNumber(value, &unserializable);
+    String8 descriptionValue = descriptionForNumber(value, &unserializable);
     *result = RemoteObject::create()
                   .setType(RemoteObject::TypeEnum::Number)
                   .setDescription(descriptionValue)
@@ -624,7 +630,7 @@ class NumberMirror final : public ValueMirrorBase {
     return Response::Success();
   }
   void buildPropertyPreview(
-      v8::Local<v8::Context> context, const String16& name,
+      v8::Local<v8::Context> context, const String8& name,
       std::unique_ptr<PropertyPreview>* result) const override {
     v8::Local<v8::Number> value =
         v8Value(v8::Isolate::GetCurrent()).As<v8::Number>();
@@ -662,7 +668,7 @@ class NumberMirror final : public ValueMirrorBase {
     v8::Local<v8::Number> value =
         v8Value(v8::Isolate::GetCurrent()).As<v8::Number>();
     bool unserializable = false;
-    String16 descriptionValue = descriptionForNumber(value, &unserializable);
+    String8 descriptionValue = descriptionForNumber(value, &unserializable);
     if (unserializable) {
       (*result)->setValue("value",
                           protocol::StringValue::create(descriptionValue));
@@ -683,7 +689,7 @@ class BigIntMirror final : public ValueMirrorBase {
       std::unique_ptr<RemoteObject>* result) const override {
     v8::Local<v8::BigInt> value =
         v8Value(v8::Isolate::GetCurrent()).As<v8::BigInt>();
-    String16 description = descriptionForBigInt(context, value);
+    String8 description = descriptionForBigInt(context, value);
     *result = RemoteObject::create()
                   .setType(RemoteObject::TypeEnum::Bigint)
                   .setUnserializableValue(description)
@@ -692,8 +698,7 @@ class BigIntMirror final : public ValueMirrorBase {
     return Response::Success();
   }
 
-  void buildPropertyPreview(v8::Local<v8::Context> context,
-                            const String16& name,
+  void buildPropertyPreview(v8::Local<v8::Context> context, const String8& name,
                             std::unique_ptr<protocol::Runtime::PropertyPreview>*
                                 preview) const override {
     v8::Local<v8::BigInt> value =
@@ -762,8 +767,7 @@ class SymbolMirror final : public ValueMirrorBase {
     return Response::Success();
   }
 
-  void buildPropertyPreview(v8::Local<v8::Context> context,
-                            const String16& name,
+  void buildPropertyPreview(v8::Local<v8::Context> context, const String8& name,
                             std::unique_ptr<protocol::Runtime::PropertyPreview>*
                                 preview) const override {
     v8::Local<v8::Symbol> value =
@@ -835,7 +839,7 @@ class LocationMirror final : public ValueMirrorBase {
       v8::Local<v8::Context> context, const WrapOptions& wrapOptions,
       std::unique_ptr<RemoteObject>* result) const override {
     auto location = protocol::DictionaryValue::create();
-    location->setString("scriptId", String16::fromInteger(m_scriptId));
+    location->setString("scriptId", String8::fromInteger(m_scriptId));
     location->setInteger("lineNumber", m_lineNumber);
     location->setInteger("columnNumber", m_columnNumber);
     *result = RemoteObject::create()
@@ -920,12 +924,12 @@ class FunctionMirror final : public ValueMirrorBase {
   }
 
   void buildPropertyPreview(
-      v8::Local<v8::Context> context, const String16& name,
+      v8::Local<v8::Context> context, const String8& name,
       std::unique_ptr<PropertyPreview>* result) const override {
     *result = PropertyPreview::create()
                   .setName(name)
                   .setType(RemoteObject::TypeEnum::Function)
-                  .setValue(String16())
+                  .setValue(String8())
                   .build();
   }
   void buildEntryPreview(
@@ -1028,7 +1032,7 @@ struct EntryMirror {
 class PreviewPropertyAccumulator : public ValueMirror::PropertyAccumulator {
  public:
   PreviewPropertyAccumulator(v8::Isolate* isolate,
-                             const std::vector<String16>& blocklist,
+                             const std::vector<String8>& blocklist,
                              int skipIndex, int* nameLimit, int* indexLimit,
                              bool* overflow,
                              std::vector<PropertyMirror>* mirrors)
@@ -1067,7 +1071,7 @@ class PreviewPropertyAccumulator : public ValueMirror::PropertyAccumulator {
 
  private:
   v8::Isolate* m_isolate;
-  std::vector<String16> m_blocklist;
+  std::vector<String8> m_blocklist;
   int m_skipIndex;
   int* m_nameLimit;
   int* m_indexLimit;
@@ -1079,7 +1083,7 @@ bool getPropertiesForPreview(v8::Local<v8::Context> context,
                              v8::Local<v8::Object> object, int* nameLimit,
                              int* indexLimit, bool* overflow,
                              std::vector<PropertyMirror>* properties) {
-  std::vector<String16> blocklist;
+  std::vector<String8> blocklist;
   size_t length = 0;
   if (isArrayLike(context, object, &length) || object->IsStringObject()) {
     blocklist.push_back("length");
@@ -1089,7 +1093,7 @@ bool getPropertiesForPreview(v8::Local<v8::Context> context,
 #endif  // V8_ENABLE_WEBASSEMBLY
   } else {
     auto clientSubtype = clientFor(context)->valueSubtype(object);
-    if (clientSubtype && toString16(clientSubtype->string()) == "array") {
+    if (clientSubtype && toString8(clientSubtype->string()) == "array") {
       blocklist.push_back("length");
     }
   }
@@ -1116,7 +1120,7 @@ void getInternalPropertiesForPreview(
     std::vector<InternalPropertyMirror>* properties) {
   std::vector<InternalPropertyMirror> mirrors;
   ValueMirror::getInternalProperties(context, object, &mirrors);
-  std::vector<String16> allowlist;
+  std::vector<String8> allowlist;
   if (object->IsBooleanObject() || object->IsNumberObject() ||
       object->IsStringObject() || object->IsSymbolObject() ||
       object->IsBigIntObject()) {
@@ -1173,12 +1177,12 @@ void getPrivatePropertiesForPreview(
 
 class ObjectMirror final : public ValueMirrorBase {
  public:
-  ObjectMirror(v8::Local<v8::Object> value, const String16& description)
+  ObjectMirror(v8::Local<v8::Object> value, const String8& description)
       : ValueMirrorBase(v8::Isolate::GetCurrent(), value),
         m_description(description),
         m_hasSubtype(false) {}
-  ObjectMirror(v8::Local<v8::Object> value, const String16& subtype,
-               const String16& description)
+  ObjectMirror(v8::Local<v8::Object> value, const String8& subtype,
+               const String8& description)
       : ValueMirrorBase(v8::Isolate::GetCurrent(), value),
         m_description(description),
         m_hasSubtype(true),
@@ -1235,7 +1239,7 @@ class ObjectMirror final : public ValueMirrorBase {
   }
 
   void buildPropertyPreview(
-      v8::Local<v8::Context> context, const String16& name,
+      v8::Local<v8::Context> context, const String8& name,
       std::unique_ptr<PropertyPreview>* result) const override {
     *result = PropertyPreview::create()
                   .setName(name)
@@ -1271,12 +1275,12 @@ class ObjectMirror final : public ValueMirrorBase {
 
       if (!embedderDeepSerializedResult->isSuccess)
         return Response::ServerError(
-            toString16(embedderDeepSerializedResult->errorMessage->string())
+            toString8(embedderDeepSerializedResult->errorMessage->string())
                 .utf8());
 
       (*result)->setString(
           "type",
-          toString16(
+          toString8(
               embedderDeepSerializedResult->serializedValue->type->string()));
       v8::Local<v8::Value> v8Value;
       if (embedderDeepSerializedResult->serializedValue->value.ToLocal(
@@ -1390,9 +1394,9 @@ class ObjectMirror final : public ValueMirrorBase {
     if (entriesPreview) (*result)->setEntries(std::move(entriesPreview));
   }
 
-  String16 m_description;
+  String8 m_description;
   bool m_hasSubtype;
-  String16 m_subtype;
+  String8 m_subtype;
 };
 
 void nativeGetterCallback(const v8::FunctionCallbackInfo<v8::Value>& info) {
@@ -1571,7 +1575,7 @@ bool ValueMirror::getProperties(v8::Local<v8::Context> context,
     }
     if (!set->Add(context, v8Name).ToLocal(&set)) return false;
 
-    String16 name;
+    String8 name;
     std::unique_ptr<ValueMirror> symbolMirror;
     if (v8Name->IsString()) {
       name = toProtocolString(isolate, v8Name.As<v8::String>());
@@ -1701,11 +1705,11 @@ void ValueMirror::getInternalProperties(
     auto location = LocationMirror::create(function);
     if (location) {
       mirrors->emplace_back(InternalPropertyMirror{
-          String16("[[FunctionLocation]]"), std::move(location)});
+          String8("[[FunctionLocation]]"), std::move(location)});
     }
     if (function->IsGeneratorFunction()) {
       mirrors->emplace_back(InternalPropertyMirror{
-          String16("[[IsGenerator]]"),
+          String8("[[IsGenerator]]"),
           ValueMirror::create(context, v8::True(v8::Isolate::GetCurrent()))});
     }
   }
@@ -1713,7 +1717,7 @@ void ValueMirror::getInternalProperties(
     auto location = LocationMirror::createForGenerator(object);
     if (location) {
       mirrors->emplace_back(InternalPropertyMirror{
-          String16("[[GeneratorLocation]]"), std::move(location)});
+          String8("[[GeneratorLocation]]"), std::move(location)});
     }
   }
   V8Debugger* debugger =
@@ -1796,12 +1800,12 @@ std::vector<PrivatePropertyMirror> ValueMirror::getPrivateProperties(
 
 std::unique_ptr<ValueMirror> clientMirror(v8::Local<v8::Context> context,
                                           v8::Local<v8::Object> value,
-                                          const String16& subtype) {
+                                          const String8& subtype) {
   auto descriptionForValueSubtype =
       clientFor(context)->descriptionForValueSubtype(context, value);
   if (descriptionForValueSubtype) {
     return std::make_unique<ObjectMirror>(
-        value, subtype, toString16(descriptionForValueSubtype->string()));
+        value, subtype, toString8(descriptionForValueSubtype->string()));
   }
   if (subtype == "error") {
     return std::make_unique<ObjectMirror>(value,
@@ -1860,7 +1864,7 @@ std::unique_ptr<ValueMirror> ValueMirror::create(v8::Local<v8::Context> context,
   v8::Local<v8::Object> object = value.As<v8::Object>();
   auto clientSubtype = clientFor(context)->valueSubtype(object);
   if (clientSubtype) {
-    String16 subtype = toString16(clientSubtype->string());
+    String8 subtype = toString8(clientSubtype->string());
     return clientMirror(context, object, subtype);
   }
   if (object->IsRegExp()) {

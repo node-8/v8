@@ -69,9 +69,14 @@ static uint32_t kCrcTable[256] = {
     0x5d681b02L, 0x2a6f2b94L, 0xb40bbe37L, 0xc30c8ea1L, 0x5a05df1bL,
     0x2d02ef8dL};
 
-int32_t computeCrc32(const String16& text) {
-  const uint8_t* bytes = reinterpret_cast<const uint8_t*>(text.characters16());
-  size_t byteLength = sizeof(UChar) * text.length();
+int32_t computeCrc32(const String8& text, bool legacy_utf16) {
+  // Saved stock breakpoint hints use the legacy UTF-16 checksum format.
+  auto units = legacy_utf16 ? text.toUTF16() : std::vector<uint16_t>();
+  const uint8_t* bytes = legacy_utf16
+                             ? reinterpret_cast<const uint8_t*>(units.data())
+                             : text.characters8();
+  size_t byteLength =
+      legacy_utf16 ? units.size() * sizeof(uint16_t) : text.length();
 
   uint32_t checksum = 0;
   for (size_t i = 0; i < byteLength; ++i) {

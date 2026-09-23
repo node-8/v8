@@ -12,10 +12,10 @@ namespace v8_inspector {
 
 namespace {
 
-String16 serializeId(uint64_t isolateId, int injectedScriptId, int id) {
-  return String16::concat(
-      String16::fromInteger64(static_cast<int64_t>(isolateId)), ".",
-      String16::fromInteger(injectedScriptId), ".", String16::fromInteger(id));
+String8 serializeId(uint64_t isolateId, int injectedScriptId, int id) {
+  return String8::concat(
+      String8::fromInteger64(static_cast<int64_t>(isolateId)), ".",
+      String8::fromInteger(injectedScriptId), ".", String8::fromInteger(id));
 }
 
 }  // namespace
@@ -23,16 +23,16 @@ String16 serializeId(uint64_t isolateId, int injectedScriptId, int id) {
 RemoteObjectIdBase::RemoteObjectIdBase()
     : m_isolateId(0), m_injectedScriptId(0), m_id(0) {}
 
-bool RemoteObjectIdBase::parseId(const String16& objectId) {
-  const UChar dot = '.';
+bool RemoteObjectIdBase::parseId(const String8& objectId) {
+  const uint8_t dot = '.';
   size_t firstDotPos = objectId.find(dot);
-  if (firstDotPos == String16::kNotFound) return false;
+  if (firstDotPos == String8::kNotFound) return false;
   bool ok = false;
   int64_t isolateId = objectId.substring(0, firstDotPos).toInteger64(&ok);
   if (!ok) return false;
   firstDotPos++;
   size_t secondDotPos = objectId.find(dot, firstDotPos);
-  if (secondDotPos == String16::kNotFound) return false;
+  if (secondDotPos == String8::kNotFound) return false;
   int injectedScriptId =
       objectId.substring(firstDotPos, secondDotPos - firstDotPos)
           .toInteger(&ok);
@@ -46,7 +46,7 @@ bool RemoteObjectIdBase::parseId(const String16& objectId) {
   return true;
 }
 
-Response RemoteObjectId::parse(const String16& objectId,
+Response RemoteObjectId::parse(const String8& objectId,
                                std::unique_ptr<RemoteObjectId>* result) {
   std::unique_ptr<RemoteObjectId> remoteObjectId(new RemoteObjectId());
   if (!remoteObjectId->parseId(objectId))
@@ -55,12 +55,12 @@ Response RemoteObjectId::parse(const String16& objectId,
   return Response::Success();
 }
 
-String16 RemoteObjectId::serialize(uint64_t isolateId, int injectedScriptId,
-                                   int id) {
+String8 RemoteObjectId::serialize(uint64_t isolateId, int injectedScriptId,
+                                  int id) {
   return serializeId(isolateId, injectedScriptId, id);
 }
 
-Response RemoteCallFrameId::parse(const String16& objectId,
+Response RemoteCallFrameId::parse(const String8& objectId,
                                   std::unique_ptr<RemoteCallFrameId>* result) {
   std::unique_ptr<RemoteCallFrameId> remoteCallFrameId(new RemoteCallFrameId());
   if (!remoteCallFrameId->parseId(objectId))
@@ -69,8 +69,8 @@ Response RemoteCallFrameId::parse(const String16& objectId,
   return Response::Success();
 }
 
-String16 RemoteCallFrameId::serialize(uint64_t isolateId, int injectedScriptId,
-                                      int frameOrdinal) {
+String8 RemoteCallFrameId::serialize(uint64_t isolateId, int injectedScriptId,
+                                     int frameOrdinal) {
   return serializeId(isolateId, injectedScriptId, frameOrdinal);
 }
 

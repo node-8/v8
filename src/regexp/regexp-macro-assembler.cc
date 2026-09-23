@@ -42,6 +42,64 @@ bool RegExpMacroAssembler::CanReadUnaligned() const {
          !slow_safe();
 }
 
+void RegExpMacroAssembler::AdvanceUtf8Position() {
+  DCHECK_EQ(mode(), LATIN1);
+  Label one, two, three, four, done;
+  Label two_byte, three_byte, three_e0, three_tail;
+  Label four_f0, four_f4, four_tail;
+  auto continuation = [&](int offset, Label* invalid, int low = 0x80,
+                          int high = 0xbf) {
+    LoadCurrentCharacter(offset, invalid);
+    CheckCharacterNotInRange(low, high, invalid);
+  };
+
+  LoadCurrentCharacter(0, nullptr, false);
+  CheckCharacterLT(0xc2, &one);  // ASCII, continuation or invalid lead.
+  CheckCharacterGT(0xf4, &one);
+  CheckCharacterLT(0xe0, &two_byte);
+  CheckCharacterLT(0xf0, &three_byte);
+  CheckCharacter(0xf0, &four_f0);
+  CheckCharacter(0xf4, &four_f4);
+  continuation(1, &one);
+  GoTo(&four_tail);
+  Bind(&four_f0);
+  continuation(1, &one, 0x90);
+  GoTo(&four_tail);
+  Bind(&four_f4);
+  continuation(1, &one, 0x80, 0x8f);
+  Bind(&four_tail);
+  continuation(2, &two);
+  continuation(3, &three);
+  GoTo(&four);
+
+  Bind(&three_byte);
+  CheckCharacter(0xe0, &three_e0);
+  continuation(1, &one);  // ED permits WTF-8 surrogate values.
+  GoTo(&three_tail);
+  Bind(&three_e0);
+  continuation(1, &one, 0xa0);
+  Bind(&three_tail);
+  continuation(2, &two);
+  GoTo(&three);
+
+  Bind(&two_byte);
+  continuation(1, &one);
+  GoTo(&two);
+
+  Bind(&four);
+  AdvanceCurrentPosition(4);
+  GoTo(&done);
+  Bind(&three);
+  AdvanceCurrentPosition(3);
+  GoTo(&done);
+  Bind(&two);
+  AdvanceCurrentPosition(2);
+  GoTo(&done);
+  Bind(&one);
+  AdvanceCurrentPosition(1);
+  Bind(&done);
+}
+
 // static
 int RegExpMacroAssembler::CaseInsensitiveCompareNonUnicode(Address byte_offset1,
                                                            Address byte_offset2,

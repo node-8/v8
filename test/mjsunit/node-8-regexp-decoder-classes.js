@@ -154,8 +154,8 @@ assertEquals([[0x80], [], [0x81], []],
 assertEquals('XXaXX', raw(0x80, 0x61, 0x81).replace(/[\uFFFD]*/gu, 'X'));
 
 const continuationStarMatches = Array.from(eAcute.matchAll(/[\uFFFD]*/gu));
-assertEquals([0, 1, 2], continuationStarMatches.map(match => match.index));
-assertEquals([[], [0xa9], []],
+assertEquals([0, 2], continuationStarMatches.map(match => match.index));
+assertEquals([[], []],
              continuationStarMatches.map(match => byteValues(match[0])));
 
 const asciiClassStarSubject = cjk + '\n' + cjk;
@@ -197,9 +197,9 @@ assertEquals([cjk, '', ''],
 
 const positiveAsciiOptionalMatches = Array.from(
     (cjk + 'a').matchAll(/[a-z]?/gu));
-assertEquals([0, 1, 2, 3, 4],
+assertEquals([0, 3, 4],
              positiveAsciiOptionalMatches.map(match => match.index));
-assertEquals(['', '', '', 'a', ''],
+assertEquals(['', 'a', ''],
              positiveAsciiOptionalMatches.map(match => match[0]));
 
 const stickyOptional = /[^é]?/uy;

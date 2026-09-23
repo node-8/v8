@@ -360,7 +360,8 @@ void Scanner::TryToParseMagicComment(base::uc32 hash_or_at_sign) {
   }
   if (c0_ != '=')
     return;
-  value->Start();
+  value->StartByteString(v8_flags.utf8_string_semantics &&
+                         value != &per_function_compile_hints_value);
   Advance();
   while (IsWhiteSpace(c0_)) {
     Advance();

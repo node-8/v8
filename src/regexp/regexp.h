@@ -47,6 +47,13 @@ struct RegExpCompileData {
   // True, iff the pattern is anchored at the start of the string with '^'.
   bool contains_anchor = false;
 
+  // Accepted nullable lookarounds/decoder roots need scalar search candidates.
+  // Compilation-local: emitted bytecode already carries the strategy at tier-up.
+  bool node8_scalar_search = false;
+  // A replacement-capable first consumer can match an interior continuation;
+  // nonempty graph bounds alone do not justify arbitrary byte search skips.
+  bool node8_decoder_sensitive = false;
+
   // Only set if the pattern contains named captures.
   // Note: the lifetime equals that of the parse/compile zone.
   ZoneVector<RegExpCapture*>* named_captures = nullptr;

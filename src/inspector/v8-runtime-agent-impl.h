@@ -69,7 +69,7 @@ class V8RuntimeAgentImpl : public protocol::Runtime::Backend {
   Response enable() override;
   Response disable() override;
   void evaluate(
-      const String16& expression, std::optional<String16> objectGroup,
+      const String8& expression, std::optional<String8> objectGroup,
       std::optional<bool> includeCommandLineAPI, std::optional<bool> silent,
       std::optional<int> executionContextId, std::optional<bool> returnByValue,
       std::optional<bool> generatePreview, std::optional<bool> userGesture,
@@ -77,30 +77,29 @@ class V8RuntimeAgentImpl : public protocol::Runtime::Backend {
       std::optional<double> timeout, std::optional<bool> disableBreaks,
       std::optional<bool> replMode,
       std::optional<bool> allowUnsafeEvalBlockedByCSP,
-      std::optional<String16> uniqueContextId,
+      std::optional<String8> uniqueContextId,
       std::unique_ptr<protocol::Runtime::SerializationOptions>
           serializationOptions,
       std::unique_ptr<EvaluateCallback>) override;
-  void awaitPromise(const String16& promiseObjectId,
+  void awaitPromise(const String8& promiseObjectId,
                     std::optional<bool> returnByValue,
                     std::optional<bool> generatePreview,
                     std::unique_ptr<AwaitPromiseCallback>) override;
   void callFunctionOn(
-      const String16& expression, std::optional<String16> objectId,
+      const String8& expression, std::optional<String8> objectId,
       std::unique_ptr<protocol::Array<protocol::Runtime::CallArgument>>
           optionalArguments,
       std::optional<bool> silent, std::optional<bool> returnByValue,
       std::optional<bool> generatePreview, std::optional<bool> userGesture,
       std::optional<bool> awaitPromise, std::optional<int> executionContextId,
-      std::optional<String16> objectGroup,
-      std::optional<bool> throwOnSideEffect,
-      std::optional<String16> uniqueContextId,
+      std::optional<String8> objectGroup, std::optional<bool> throwOnSideEffect,
+      std::optional<String8> uniqueContextId,
       std::unique_ptr<protocol::Runtime::SerializationOptions>
           serializationOptions,
       std::unique_ptr<CallFunctionOnCallback>) override;
-  Response releaseObject(const String16& objectId) override;
+  Response releaseObject(const String8& objectId) override;
   Response getProperties(
-      const String16& objectId, std::optional<bool> ownProperties,
+      const String8& objectId, std::optional<bool> ownProperties,
       std::optional<bool> accessorPropertiesOnly,
       std::optional<bool> generatePreview,
       std::optional<bool> nonIndexedPropertiesOnly,
@@ -113,43 +112,42 @@ class V8RuntimeAgentImpl : public protocol::Runtime::Backend {
           protocol::Array<protocol::Runtime::PrivatePropertyDescriptor>>*
           privateProperties,
       std::unique_ptr<protocol::Runtime::ExceptionDetails>*) override;
-  Response releaseObjectGroup(const String16& objectGroup) override;
+  Response releaseObjectGroup(const String8& objectGroup) override;
   Response runIfWaitingForDebugger() override;
   Response setCustomObjectFormatterEnabled(bool) override;
   Response setMaxCallStackSizeToCapture(int) override;
   Response discardConsoleEntries() override;
   Response compileScript(
-      const String16& expression, const String16& sourceURL, bool persistScript,
-      std::optional<int> executionContextId, std::optional<String16>*,
+      const String8& expression, const String8& sourceURL, bool persistScript,
+      std::optional<int> executionContextId, std::optional<String8>*,
       std::unique_ptr<protocol::Runtime::ExceptionDetails>*) override;
-  void runScript(const String16&, std::optional<int> executionContextId,
-                 std::optional<String16> objectGroup,
-                 std::optional<bool> silent,
+  void runScript(const String8&, std::optional<int> executionContextId,
+                 std::optional<String8> objectGroup, std::optional<bool> silent,
                  std::optional<bool> includeCommandLineAPI,
                  std::optional<bool> returnByValue,
                  std::optional<bool> generatePreview,
                  std::optional<bool> awaitPromise,
                  std::unique_ptr<RunScriptCallback>) override;
   Response queryObjects(
-      const String16& prototypeObjectId, std::optional<String16> objectGroup,
+      const String8& prototypeObjectId, std::optional<String8> objectGroup,
       std::unique_ptr<protocol::Runtime::RemoteObject>* objects) override;
   Response globalLexicalScopeNames(
       std::optional<int> executionContextId,
-      std::unique_ptr<protocol::Array<String16>>* outNames) override;
-  Response getIsolateId(String16* outIsolateId) override;
+      std::unique_ptr<protocol::Array<String8>>* outNames) override;
+  Response getIsolateId(String8* outIsolateId) override;
   Response getHeapUsage(double* out_usedSize, double* out_totalSize,
                         double* out_embedderHeapUsedSize,
                         double* out_backingStorageSize) override;
   void terminateExecution(
       std::unique_ptr<TerminateExecutionCallback> callback) override;
 
-  Response addBinding(const String16& name,
+  Response addBinding(const String8& name,
                       std::optional<int> executionContextId,
-                      std::optional<String16> executionContextName) override;
-  Response removeBinding(const String16& name) override;
+                      std::optional<String8> executionContextName) override;
+  Response removeBinding(const String8& name) override;
   void addBindings(InspectedContext* context);
   Response getExceptionDetails(
-      const String16& errorObjectId,
+      const String8& errorObjectId,
       std::unique_ptr<protocol::Runtime::ExceptionDetails>*
           out_exceptionDetails) override;
 
@@ -166,9 +164,9 @@ class V8RuntimeAgentImpl : public protocol::Runtime::Backend {
   bool reportMessage(V8ConsoleMessage*, bool generatePreview);
 
   static void bindingCallback(const v8::FunctionCallbackInfo<v8::Value>& info);
-  void bindingCalled(const String16& name, const String16& payload,
+  void bindingCalled(const String8& name, const String8& payload,
                      int executionContextId);
-  void addBinding(InspectedContext* context, const String16& name);
+  void addBinding(InspectedContext* context, const String8& name);
 
   V8InspectorSessionImpl* m_session;
   protocol::DictionaryValue* m_state;
@@ -176,10 +174,10 @@ class V8RuntimeAgentImpl : public protocol::Runtime::Backend {
   V8InspectorImpl* m_inspector;
   std::shared_ptr<V8DebuggerBarrier> m_debuggerBarrier;
   bool m_enabled;
-  std::unordered_map<String16, std::unique_ptr<v8::Global<v8::Script>>>
+  std::unordered_map<String8, std::unique_ptr<v8::Global<v8::Script>>>
       m_compiledScripts;
   // Binding name -> executionContextIds mapping.
-  std::unordered_map<String16, std::unordered_set<int>> m_activeBindings;
+  std::unordered_map<String8, std::unordered_set<int>> m_activeBindings;
 };
 
 }  // namespace v8_inspector

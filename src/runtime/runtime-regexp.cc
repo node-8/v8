@@ -19,6 +19,7 @@
 #include "src/regexp/regexp.h"
 #include "src/strings/string-builder-inl.h"
 #include "src/strings/string-search.h"
+#include "src/strings/unicode-decoder.h"
 
 namespace v8 {
 namespace internal {
@@ -2272,6 +2273,14 @@ inline int AdvanceStringIndex(base::Vector<const Char> subject, int index,
   // Taken from RegExpUtils::AdvanceStringIndex:
 
   const int subject_length = subject.length();
+  if constexpr (std::is_same_v<Char, uint8_t>) {
+    if (v8_flags.utf8_string_semantics) {
+      if (index >= subject_length || subject[index] < 0x80) return index + 1;
+      Wtf8ByteCursor cursor(subject, Wtf8ByteCursor::Policy::kInternalWtf8,
+                            index);
+      return index + static_cast<int>(cursor.DecodeNext().byte_length);
+    }
+  }
   if (is_unicode && index < subject_length) {
     const uint16_t first = subject[index];
     if (first >= 0xD800 && first <= 0xDBFF && index + 1 < subject_length) {

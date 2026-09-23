@@ -17,6 +17,7 @@ class BoyerMooreLookahead;
 class CharacterRange;
 class SpecialLoopState;
 class NegativeSubmatchSuccess;
+class Node8PackedClassPlan;
 class NodeVisitor;
 class QuickCheckDetails;
 class RegExpCompiler;
@@ -513,6 +514,14 @@ class TextNode : public SeqRegExpNode {
 // only needs an ASCII exclusion range: every non-ASCII result matches.
 class Wtf8ScalarNode : public SeqRegExpNode {
  public:
+  // Forward-only candidate-search edge, accepting any scalar/maximal subpart.
+  Wtf8ScalarNode(RegExpNode* on_success, bool allow_byte_skip)
+      : SeqRegExpNode(on_success),
+        excluded_from_(0),
+        excluded_to_(0),
+        slow_node_(nullptr),
+        is_any_scalar_(true),
+        allow_byte_skip_(allow_byte_skip) {}
   Wtf8ScalarNode(base::uc32 excluded_from, base::uc32 excluded_to,
                  RegExpNode* on_success, bool use_range_dispatch)
       : SeqRegExpNode(on_success),
@@ -533,6 +542,16 @@ class Wtf8ScalarNode : public SeqRegExpNode {
         positive_ascii_ranges_(positive_ascii_ranges),
         positive_non_ascii_node_(positive_non_ascii_node),
         is_positive_class_(true) {}
+  Wtf8ScalarNode(ZoneList<CharacterRange>* positive_ascii_ranges,
+                 Node8PackedClassPlan* positive_packed_class_plan,
+                 RegExpNode* on_success)
+      : SeqRegExpNode(on_success),
+        excluded_from_(0),
+        excluded_to_(0),
+        slow_node_(nullptr),
+        positive_ascii_ranges_(positive_ascii_ranges),
+        positive_packed_class_plan_(positive_packed_class_plan),
+        is_positive_class_(true) {}
   Wtf8ScalarNode* AsWtf8ScalarNode() override { return this; }
   void Accept(NodeVisitor* visitor) override;
   V8_WARN_UNUSED_RESULT EmitResult Emit(RegExpCompiler* compiler,
@@ -548,11 +567,16 @@ class Wtf8ScalarNode : public SeqRegExpNode {
   base::uc32 excluded_from() const { return excluded_from_; }
   base::uc32 excluded_to() const { return excluded_to_; }
   bool is_positive_class() const { return is_positive_class_; }
+  bool is_any_scalar() const { return is_any_scalar_; }
+  bool allow_byte_skip() const { return allow_byte_skip_; }
   ZoneList<CharacterRange>* positive_ascii_ranges() const {
     return positive_ascii_ranges_;
   }
   RegExpNode* positive_non_ascii_node() const {
     return positive_non_ascii_node_;
+  }
+  Node8PackedClassPlan* positive_packed_class_plan() const {
+    return positive_packed_class_plan_;
   }
 
  private:
@@ -571,9 +595,12 @@ class Wtf8ScalarNode : public SeqRegExpNode {
   Wtf8ScalarNode* slow_node_;
   ZoneList<CharacterRange>* positive_ascii_ranges_ = nullptr;
   RegExpNode* positive_non_ascii_node_ = nullptr;
+  Node8PackedClassPlan* positive_packed_class_plan_ = nullptr;
   bool is_slow_node_ = false;
   bool use_range_dispatch_ = false;
   bool is_positive_class_ = false;
+  bool is_any_scalar_ = false;
+  bool allow_byte_skip_ = false;
 
   friend Zone;
 };
@@ -585,7 +612,8 @@ class AssertionNode : public SeqRegExpNode {
     AT_START,
     AT_BOUNDARY,
     AT_NON_BOUNDARY,
-    AFTER_NEWLINE
+    AFTER_NEWLINE,
+    NODE8_END_LITERAL
   };
   static AssertionNode* AtEnd(RegExpNode* on_success) {
     return on_success->zone()->New<AssertionNode>(AT_END, on_success);
@@ -602,6 +630,12 @@ class AssertionNode : public SeqRegExpNode {
   static AssertionNode* AfterNewline(RegExpNode* on_success) {
     return on_success->zone()->New<AssertionNode>(AFTER_NEWLINE, on_success);
   }
+  static AssertionNode* Node8EndLiteral(
+      base::Vector<const base::uc16> literal, int minimum_remaining,
+      int position_register, RegExpNode* on_success) {
+    return on_success->zone()->New<AssertionNode>(
+        literal, minimum_remaining, position_register, on_success);
+  }
   AssertionNode* AsAssertionNode() override { return this; }
   void Accept(NodeVisitor* visitor) override;
   V8_WARN_UNUSED_RESULT EmitResult Emit(RegExpCompiler* compiler,
@@ -612,6 +646,11 @@ class AssertionNode : public SeqRegExpNode {
   void FillInBMInfo(Isolate* isolate, int offset, int budget,
                     BoyerMooreLookahead* bm, bool not_at_start) override;
   AssertionType assertion_type() const { return assertion_type_; }
+  base::Vector<const base::uc16> node8_end_literal() const {
+    return node8_end_literal_;
+  }
+  int node8_minimum_remaining() const { return node8_minimum_remaining_; }
+  int node8_position_register() const { return node8_position_register_; }
 
  private:
   friend Zone;
@@ -623,7 +662,18 @@ class AssertionNode : public SeqRegExpNode {
       RegExpCompiler* compiler, Trace* trace, IfPrevious backtrack_if_previous);
   AssertionNode(AssertionType t, RegExpNode* on_success)
       : SeqRegExpNode(on_success), assertion_type_(t) {}
+  AssertionNode(base::Vector<const base::uc16> literal,
+                int minimum_remaining, int position_register,
+                RegExpNode* on_success)
+      : SeqRegExpNode(on_success),
+        assertion_type_(NODE8_END_LITERAL),
+        node8_end_literal_(literal),
+        node8_minimum_remaining_(minimum_remaining),
+        node8_position_register_(position_register) {}
   AssertionType assertion_type_;
+  base::Vector<const base::uc16> node8_end_literal_;
+  int node8_minimum_remaining_ = 0;
+  int node8_position_register_ = -1;
 };
 
 class BackReferenceNode : public SeqRegExpNode {

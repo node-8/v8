@@ -36,7 +36,7 @@
 #include "include/v8-maybe.h"
 #include "src/base/macros.h"
 #include "src/debug/debug-interface.h"
-#include "src/inspector/string-16.h"
+#include "src/inspector/string-8.h"
 #include "src/inspector/string-util.h"
 
 namespace v8 {
@@ -60,16 +60,19 @@ class V8DebuggerScript {
   V8DebuggerScript& operator=(const V8DebuggerScript&) = delete;
 
   v8::Local<v8::debug::ScriptSource> scriptSource();
-  const String16& scriptId() const { return m_id; }
+  const String8& scriptId() const { return m_id; }
   bool hasSourceURLComment() const { return m_hasSourceURLComment; }
-  const String16& sourceURL() const { return m_url; }
-  const String16& embedderName() const { return m_embedderName; }
+  const String8& sourceURL() const { return m_url; }
+  const String8& embedderName() const { return m_embedderName; }
 
-  const String16& sourceMappingURL() const { return m_sourceMappingURL; }
-  String16 source(size_t pos, size_t len = UINT_MAX) const;
+  const String8& sourceMappingURL() const { return m_sourceMappingURL; }
+  // Breakpoint windows preserve byte coordinates; full protocol output applies
+  // the Unicode boundary policy. Window ends do not split encoded scalars.
+  String8 source(size_t pos, size_t len = UINT_MAX,
+                 bool for_protocol = true) const;
   Language getLanguage() const { return m_language; }
-  const String16& hash() const;
-  String16 buildId() const;
+  const String8& hash() const;
+  String8 buildId() const;
   int startLine() const { return m_startLine; }
   int startColumn() const { return m_startColumn; }
   int endLine() const { return m_endLine; }
@@ -80,10 +83,10 @@ class V8DebuggerScript {
   bool isModule() const { return m_isModule; }
   int length() const;
 
-  void setSourceURL(const String16&);
-  void setSourceMappingURL(const String16&);
-  void setBuildId(const String16&);
-  void setSource(const String16& source, bool preview,
+  void setSourceURL(const String8&);
+  void setSourceMappingURL(const String8&);
+  void setBuildId(const String8&);
+  void setSource(const String8& source, bool preview,
                  bool allowTopFrameLiveEditing,
                  v8::debug::LiveEditResult* result);
 
@@ -96,7 +99,7 @@ class V8DebuggerScript {
   v8::Maybe<int> offset(int lineNumber, int columnNumber) const;
   v8::debug::Location location(int offset) const;
 
-  bool setBreakpoint(const String16& condition, v8::debug::Location* location,
+  bool setBreakpoint(const String8& condition, v8::debug::Location* location,
                      int* id) const;
   void MakeWeak();
   void WeakCallback();
@@ -113,28 +116,28 @@ class V8DebuggerScript {
  private:
   v8::Local<v8::debug::Script> script() const;
 
-  static String16 GetScriptURL(v8::Isolate* isolate,
+  static String8 GetScriptURL(v8::Isolate* isolate,
+                              v8::Local<v8::debug::Script> script,
+                              V8InspectorClient* client);
+  static String8 GetScriptName(v8::Isolate* isolate,
                                v8::Local<v8::debug::Script> script,
                                V8InspectorClient* client);
-  static String16 GetScriptName(v8::Isolate* isolate,
-                                v8::Local<v8::debug::Script> script,
-                                V8InspectorClient* client);
   void Initialize(v8::Local<v8::debug::Script> script);
 
-  String16 m_id;
-  String16 m_url;
+  String8 m_id;
+  String8 m_url;
   bool m_hasSourceURLComment = false;
   int m_executionContextId = 0;
 
   v8::Isolate* m_isolate;
-  String16 m_embedderName;
+  String8 m_embedderName;
   V8DebuggerAgentImpl* m_agent;
-  String16 m_sourceMappingURL;
-  mutable String16 m_buildId;
+  String8 m_sourceMappingURL;
+  mutable String8 m_buildId;
   Language m_language;
   bool m_isLiveEdit = false;
   bool m_isModule = false;
-  mutable String16 m_hash;
+  mutable String8 m_hash;
   int m_startLine = 0;
   int m_startColumn = 0;
   int m_endLine = 0;

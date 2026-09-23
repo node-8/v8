@@ -6,8 +6,11 @@
 #include "include/v8-regexp.h"
 #include "src/api/api-inl.h"
 #include "src/execution/frames-inl.h"
+#include "src/objects/string-inl.h"
+#include "src/regexp/regexp-utils.h"
 #include "test/cctest/cctest.h"
 #include "test/cctest/heap/heap-utils.h"
+#include "test/common/flag-utils.h"
 
 using namespace v8;
 
@@ -347,4 +350,139 @@ TEST(InterruptAndTransitionSubjectFromTwoByteToOneByte) {
   i::Tagged<i::IrRegExpData> data =
       CheckedCast<i::IrRegExpData>(regexp->data(i_isolate));
   CHECK(data->has_latin1_bytecode());
+}
+
+namespace {
+
+class UncachedOneByteVectorResource : public OneByteVectorResource {
+ public:
+  using OneByteVectorResource::OneByteVectorResource;
+  bool IsCacheable() const override { return false; }
+};
+
+void TestRegExpEmptyAdvancePreservesStringShapes(bool node8) {
+  i::FlagScope<bool> utf8(&i::v8_flags.utf8_string_semantics, node8);
+  CHECK(i::v8_flags.string_slices);
+  CcTest::InitializeVM();
+  Isolate* isolate = CcTest::isolate();
+  i::Isolate* i_isolate = CcTest::i_isolate();
+  HandleScope scope(isolate);
+  LocalContext env;
+  CHECK_EQ(node8 ? 2 : 1, CompileRun("String.fromCodePoint(233).length")
+                              ->Int32Value(env.local())
+                              .FromJust());
+
+  // No real matcher runs: the empty custom result reaches CSA advancement
+  // without the normal regexp execution path first flattening the subject.
+  Local<Function> advance = CompileRun(R"JS(
+    (function(subject, start, flags) {
+      let calls = 0;
+      const regexp = { flags, exec() {
+        if (calls++ === 0) { this.lastIndex = start; return ['']; }
+        return null;
+      }};
+      const matches = RegExp.prototype[Symbol.match].call(regexp, subject);
+      if (calls !== 2 || matches.length !== 1 || matches[0] !== '') {
+        throw new Error('custom exec did not exercise empty advancement');
+      }
+      return regexp.lastIndex;
+    })
+  )JS")
+                                .As<Function>();
+
+  auto check = [&](i::DirectHandle<i::String> subject, uint32_t index,
+                   uint32_t byte_next, auto check_shape) {
+    const uint32_t expected = node8 ? byte_next : index + 1;
+    check_shape();
+    for (bool unicode : {false, true}) {
+      i::DisallowGarbageCollection no_gc;
+      CHECK_EQ(expected,
+               i::RegExpUtils::AdvanceStringIndex(*subject, index, unicode));
+      check_shape();
+    }
+    const char* flags[] = {"g", "gu", "gv"};
+    for (int i = 0; i < (node8 ? 3 : 1); ++i) {
+      Local<Value> args[] = {Utils::ToLocal(subject),
+                             Integer::NewFromUnsigned(isolate, index),
+                             v8_str(flags[i])};
+      CHECK_EQ(expected, advance->Call(env.local(), Undefined(isolate), 3, args)
+                             .ToLocalChecked()
+                             ->Uint32Value(env.local())
+                             .FromJust());
+      check_shape();
+    }
+  };
+
+  // The emoji crosses the cons boundary at byte 16. Other local windows
+  // contain a WTF-8 surrogate and a two-byte malformed maximal subpart.
+  static const char bytes[] =
+      "aaaaaaaaaaaaaa\xf0\x9f\x98\x80x\xed\xa0\x80y\xe4\xb8zbbbbbb";
+  static_assert(sizeof(bytes) - 1 == 32);
+  auto* factory = i_isolate->factory();
+  i::Handle<i::String> left =
+      factory->NewStringFromOneByte(base::OneByteVector(bytes, 16))
+          .ToHandleChecked();
+  i::Handle<i::String> right =
+      factory->NewStringFromOneByte(base::OneByteVector(bytes + 16, 16))
+          .ToHandleChecked();
+  i::DirectHandle<i::String> rope =
+      factory->NewConsString(left, right).ToHandleChecked();
+  auto check_rope = [&] {
+    CHECK(i::IsConsString(*rope));
+    CHECK(!rope->IsFlat());
+    CHECK_EQ(*left, i::Cast<i::ConsString>(*rope)->first());
+    CHECK_EQ(*right, i::Cast<i::ConsString>(*rope)->second());
+  };
+  check(rope, 0, 1, check_rope);
+  check(rope, 14, 18, check_rope);
+  check(rope, 15, 16, check_rope);
+  check(rope, 19, 22, check_rope);
+  check(rope, 23, 25, check_rope);
+  check(rope, 32, 33, check_rope);
+
+  i::DirectHandle<i::String> parent =
+      factory->NewStringFromOneByte(base::OneByteVector(bytes, 32))
+          .ToHandleChecked();
+  i::DirectHandle<i::String> slice = factory->NewSubString(parent, 1, 16);
+  auto check_slice = [&] {
+    CHECK(i::IsSlicedString(*slice));
+    CHECK_EQ(*parent, i::Cast<i::SlicedString>(*slice)->parent());
+    CHECK_EQ(1, i::Cast<i::SlicedString>(*slice)->offset());
+    CHECK_EQ(15, slice->length());
+  };
+  // The parent has a complete emoji, but the slice ends after its first two
+  // bytes. Decoding must stop at the slice boundary, not the parent's end.
+  check(slice, 13, 15, check_slice);
+  check(slice, 14, 15, check_slice);
+  check(slice, 15, 16, check_slice);
+
+  static OneByteVectorResource cached(base::Vector<const char>(bytes, 32));
+  static UncachedOneByteVectorResource uncached(
+      base::Vector<const char>(bytes, 32));
+  const String::ExternalOneByteStringResource* resources[] = {&cached,
+                                                              &uncached};
+  for (const auto* resource : resources) {
+    i::DirectHandle<i::String> external =
+        factory->NewExternalStringFromOneByte(resource).ToHandleChecked();
+    auto check_external = [&] {
+      CHECK(i::IsExternalOneByteString(*external));
+      auto string = i::Cast<i::ExternalOneByteString>(*external);
+      CHECK_EQ(resource, string->resource());
+      CHECK_EQ(!resource->IsCacheable(), string->is_uncached());
+    };
+    check(external, 0, 1, check_external);
+    check(external, 14, 18, check_external);
+    check(external, 19, 22, check_external);
+    check(external, 23, 25, check_external);
+  }
+}
+
+}  // namespace
+
+TEST(Node8RegExpEmptyAdvancePreservesStringShapes) {
+  TestRegExpEmptyAdvancePreservesStringShapes(true);
+}
+
+TEST(StockRegExpEmptyAdvancePreservesStringShapes) {
+  TestRegExpEmptyAdvancePreservesStringShapes(false);
 }

@@ -100,7 +100,7 @@ template <typename ProtocolCallback>
 bool wrapEvaluateResultAsync(InjectedScript* injectedScript,
                              v8::MaybeLocal<v8::Value> maybeResultValue,
                              const v8::TryCatch& tryCatch,
-                             const String16& objectGroup,
+                             const String8& objectGroup,
                              const WrapOptions& wrapOptions,
                              bool throwOnSideEffect,
                              ProtocolCallback* callback) {
@@ -120,11 +120,11 @@ bool wrapEvaluateResultAsync(InjectedScript* injectedScript,
 
 void innerCallFunctionOn(
     V8InspectorSessionImpl* session, InjectedScript::Scope& scope,
-    v8::Local<v8::Value> recv, const String16& expression,
+    v8::Local<v8::Value> recv, const String8& expression,
     std::unique_ptr<protocol::Array<protocol::Runtime::CallArgument>>
         optionalArguments,
     bool silent, std::unique_ptr<WrapOptions> wrapOptions, bool userGesture,
-    bool awaitPromise, const String16& objectGroup, bool throwOnSideEffect,
+    bool awaitPromise, const String8& objectGroup, bool throwOnSideEffect,
     std::unique_ptr<V8RuntimeAgentImpl::CallFunctionOnCallback> callback) {
   V8InspectorImpl* inspector = session->inspector();
 
@@ -153,7 +153,7 @@ void innerCallFunctionOn(
   v8::MaybeLocal<v8::Value> maybeFunctionValue;
   v8::Local<v8::Script> functionScript;
   if (inspector
-          ->compileScript(scope.context(), "(" + expression + ")", String16())
+          ->compileScript(scope.context(), "(" + expression + ")", String8())
           .ToLocal(&functionScript)) {
     v8::MicrotasksScope microtasksScope(scope.context(),
                                         v8::MicrotasksScope::kRunMicrotasks);
@@ -215,8 +215,7 @@ void innerCallFunctionOn(
 
 Response ensureContext(V8InspectorImpl* inspector, int contextGroupId,
                        std::optional<int> executionContextId,
-                       std::optional<String16> uniqueContextId,
-                       int* contextId) {
+                       std::optional<String8> uniqueContextId, int* contextId) {
   if (executionContextId.has_value()) {
     if (uniqueContextId.has_value()) {
       return Response::InvalidParams(
@@ -250,11 +249,11 @@ Response parseAdditionalSerializationParameters(
 
   if (additionalParameters != nullptr) {
     for (size_t i = 0; i < additionalParameters->size(); ++i) {
-      String16 key = (*additionalParameters).at(i).first;
+      String8 key = (*additionalParameters).at(i).first;
       keys.push_back(toV8String(isolate, key));
 
       protocol::Value* value = (*additionalParameters).at(i).second;
-      String16 stringValue;
+      String8 stringValue;
       if (value->asString(&stringValue)) {
         values.push_back(toV8String(isolate, stringValue));
         continue;
@@ -283,7 +282,7 @@ Response getWrapOptions(std::optional<bool> returnByValue,
                         v8::Isolate* isolate,
                         std::unique_ptr<WrapOptions>* result) {
   if (maybeSerializationOptions) {
-    String16 serializationModeStr =
+    String8 serializationModeStr =
         maybeSerializationOptions->getSerialization();
     if (serializationModeStr ==
         protocol::Runtime::SerializationOptions::SerializationEnum::Deep) {
@@ -352,7 +351,7 @@ V8RuntimeAgentImpl::V8RuntimeAgentImpl(
 V8RuntimeAgentImpl::~V8RuntimeAgentImpl() = default;
 
 void V8RuntimeAgentImpl::evaluate(
-    const String16& expression, std::optional<String16> objectGroup,
+    const String8& expression, std::optional<String8> objectGroup,
     std::optional<bool> includeCommandLineAPI, std::optional<bool> silent,
     std::optional<int> executionContextId, std::optional<bool> returnByValue,
     std::optional<bool> generatePreview, std::optional<bool> userGesture,
@@ -360,7 +359,7 @@ void V8RuntimeAgentImpl::evaluate(
     std::optional<bool> throwOnSideEffect, std::optional<double> timeout,
     std::optional<bool> disableBreaks, std::optional<bool> maybeReplMode,
     std::optional<bool> allowUnsafeEvalBlockedByCSP,
-    std::optional<String16> uniqueContextId,
+    std::optional<String8> uniqueContextId,
     std::unique_ptr<protocol::Runtime::SerializationOptions>
         serializationOptions,
     std::unique_ptr<EvaluateCallback> callback) {
@@ -451,7 +450,7 @@ void V8RuntimeAgentImpl::evaluate(
 }
 
 void V8RuntimeAgentImpl::awaitPromise(
-    const String16& promiseObjectId, std::optional<bool> returnByValue,
+    const String8& promiseObjectId, std::optional<bool> returnByValue,
     std::optional<bool> generatePreview,
     std::unique_ptr<AwaitPromiseCallback> callback) {
   InjectedScript::ObjectScope scope(m_session, promiseObjectId);
@@ -483,14 +482,14 @@ void V8RuntimeAgentImpl::awaitPromise(
 }
 
 void V8RuntimeAgentImpl::callFunctionOn(
-    const String16& expression, std::optional<String16> objectId,
+    const String8& expression, std::optional<String8> objectId,
     std::unique_ptr<protocol::Array<protocol::Runtime::CallArgument>>
         optionalArguments,
     std::optional<bool> silent, std::optional<bool> returnByValue,
     std::optional<bool> generatePreview, std::optional<bool> userGesture,
     std::optional<bool> awaitPromise, std::optional<int> executionContextId,
-    std::optional<String16> objectGroup, std::optional<bool> throwOnSideEffect,
-    std::optional<String16> uniqueContextId,
+    std::optional<String8> objectGroup, std::optional<bool> throwOnSideEffect,
+    std::optional<String8> uniqueContextId,
     std::unique_ptr<protocol::Runtime::SerializationOptions>
         serializationOptions,
     std::unique_ptr<CallFunctionOnCallback> callback) {
@@ -567,7 +566,7 @@ void V8RuntimeAgentImpl::callFunctionOn(
 }
 
 Response V8RuntimeAgentImpl::getProperties(
-    const String16& objectId, std::optional<bool> ownProperties,
+    const String8& objectId, std::optional<bool> ownProperties,
     std::optional<bool> accessorPropertiesOnly,
     std::optional<bool> generatePreview,
     std::optional<bool> nonIndexedPropertiesOnly,
@@ -623,7 +622,7 @@ Response V8RuntimeAgentImpl::getProperties(
   return Response::Success();
 }
 
-Response V8RuntimeAgentImpl::releaseObject(const String16& objectId) {
+Response V8RuntimeAgentImpl::releaseObject(const String8& objectId) {
   InjectedScript::ObjectScope scope(m_session, objectId);
   Response response = scope.initialize();
   if (!response.IsSuccess()) return response;
@@ -631,7 +630,7 @@ Response V8RuntimeAgentImpl::releaseObject(const String16& objectId) {
   return Response::Success();
 }
 
-Response V8RuntimeAgentImpl::releaseObjectGroup(const String16& objectGroup) {
+Response V8RuntimeAgentImpl::releaseObjectGroup(const String8& objectGroup) {
   m_session->releaseObjectGroup(objectGroup);
   return Response::Success();
 }
@@ -679,8 +678,8 @@ Response V8RuntimeAgentImpl::discardConsoleEntries() {
 }
 
 Response V8RuntimeAgentImpl::compileScript(
-    const String16& expression, const String16& sourceURL, bool persistScript,
-    std::optional<int> executionContextId, std::optional<String16>* scriptId,
+    const String8& expression, const String8& sourceURL, bool persistScript,
+    std::optional<int> executionContextId, std::optional<String8>* scriptId,
     std::unique_ptr<protocol::Runtime::ExceptionDetails>* exceptionDetails) {
   if (!m_enabled) return Response::ServerError("Runtime agent is not enabled");
 
@@ -701,7 +700,7 @@ Response V8RuntimeAgentImpl::compileScript(
   if (!isOk) {
     if (scope.tryCatch().HasCaught()) {
       response = scope.injectedScript()->createExceptionDetails(
-          scope.tryCatch(), String16(), exceptionDetails);
+          scope.tryCatch(), String8(), exceptionDetails);
       if (!response.IsSuccess()) return response;
       return Response::Success();
     } else {
@@ -711,8 +710,8 @@ Response V8RuntimeAgentImpl::compileScript(
 
   if (!persistScript) return Response::Success();
 
-  String16 scriptValueId =
-      String16::fromInteger(script->GetUnboundScript()->ScriptId());
+  String8 scriptValueId =
+      String8::fromInteger(script->GetUnboundScript()->ScriptId());
   std::unique_ptr<v8::Global<v8::Script>> global(
       new v8::Global<v8::Script>(m_inspector->isolate(), script));
   m_compiledScripts[scriptValueId] = std::move(global);
@@ -721,8 +720,8 @@ Response V8RuntimeAgentImpl::compileScript(
 }
 
 void V8RuntimeAgentImpl::runScript(
-    const String16& scriptId, std::optional<int> executionContextId,
-    std::optional<String16> objectGroup, std::optional<bool> silent,
+    const String8& scriptId, std::optional<int> executionContextId,
+    std::optional<String8> objectGroup, std::optional<bool> silent,
     std::optional<bool> includeCommandLineAPI,
     std::optional<bool> returnByValue, std::optional<bool> generatePreview,
     std::optional<bool> awaitPromise,
@@ -806,7 +805,7 @@ void V8RuntimeAgentImpl::runScript(
 }
 
 Response V8RuntimeAgentImpl::queryObjects(
-    const String16& prototypeObjectId, std::optional<String16> objectGroup,
+    const String8& prototypeObjectId, std::optional<String8> objectGroup,
     std::unique_ptr<protocol::Runtime::RemoteObject>* objects) {
   InjectedScript::ObjectScope scope(m_session, prototypeObjectId);
   Response response = scope.initialize();
@@ -823,7 +822,7 @@ Response V8RuntimeAgentImpl::queryObjects(
 
 Response V8RuntimeAgentImpl::globalLexicalScopeNames(
     std::optional<int> executionContextId,
-    std::unique_ptr<protocol::Array<String16>>* outNames) {
+    std::unique_ptr<protocol::Array<String8>>* outNames) {
   int contextId = 0;
   Response response = ensureContext(m_inspector, m_session->contextGroupId(),
                                     std::move(executionContextId),
@@ -836,7 +835,7 @@ Response V8RuntimeAgentImpl::globalLexicalScopeNames(
 
   std::vector<v8::Global<v8::String>> names;
   v8::debug::GlobalLexicalScopeNames(scope.context(), &names);
-  *outNames = std::make_unique<protocol::Array<String16>>();
+  *outNames = std::make_unique<protocol::Array<String8>>();
   for (size_t i = 0; i < names.size(); ++i) {
     (*outNames)->emplace_back(toProtocolString(
         m_inspector->isolate(), names[i].Get(m_inspector->isolate())));
@@ -844,7 +843,7 @@ Response V8RuntimeAgentImpl::globalLexicalScopeNames(
   return Response::Success();
 }
 
-Response V8RuntimeAgentImpl::getIsolateId(String16* outIsolateId) {
+Response V8RuntimeAgentImpl::getIsolateId(String8* outIsolateId) {
   char buf[40];
   std::snprintf(buf, sizeof(buf), "%" PRIx64, m_inspector->isolateId());
   *outIsolateId = buf;
@@ -883,7 +882,7 @@ void V8RuntimeAgentImpl::terminateExecution(
 
 namespace {
 protocol::DictionaryValue* getOrCreateDictionary(
-    protocol::DictionaryValue* dict, const String16& key) {
+    protocol::DictionaryValue* dict, const String8& key) {
   if (protocol::DictionaryValue* bindings = dict->getObject(key))
     return bindings;
   dict->setObject(key, protocol::DictionaryValue::create());
@@ -892,8 +891,8 @@ protocol::DictionaryValue* getOrCreateDictionary(
 }  // namespace
 
 Response V8RuntimeAgentImpl::addBinding(
-    const String16& name, std::optional<int> executionContextId,
-    std::optional<String16> executionContextName) {
+    const String8& name, std::optional<int> executionContextId,
+    std::optional<String8> executionContextName) {
   if (executionContextId.has_value() && executionContextName.has_value()) {
     return Response::InvalidParams(
         "executionContextName is mutually exclusive with executionContextId");
@@ -954,8 +953,8 @@ void V8RuntimeAgentImpl::bindingCallback(
   int contextId = InspectedContext::contextId(isolate->GetCurrentContext());
   int contextGroupId = inspector->contextGroupId(contextId);
 
-  String16 name = toProtocolString(isolate, info.Data().As<v8::String>());
-  String16 payload = toProtocolString(isolate, info[0].As<v8::String>());
+  String8 name = toProtocolString(isolate, info.Data().As<v8::String>());
+  String8 payload = toProtocolString(isolate, info[0].As<v8::String>());
 
   inspector->forEachSession(
       contextGroupId,
@@ -965,7 +964,7 @@ void V8RuntimeAgentImpl::bindingCallback(
 }
 
 void V8RuntimeAgentImpl::addBinding(InspectedContext* context,
-                                    const String16& name) {
+                                    const String8& name) {
   auto it = m_activeBindings.find(name);
   if (it != m_activeBindings.end() && it->second.count(context->contextId())) {
     return;
@@ -990,7 +989,7 @@ void V8RuntimeAgentImpl::addBinding(InspectedContext* context,
   }
 }
 
-Response V8RuntimeAgentImpl::removeBinding(const String16& name) {
+Response V8RuntimeAgentImpl::removeBinding(const String8& name) {
   protocol::DictionaryValue* contextBindings =
       m_state->getObject(V8RuntimeAgentImplState::contextBindings);
   if (contextBindings) {
@@ -1010,7 +1009,7 @@ Response V8RuntimeAgentImpl::removeBinding(const String16& name) {
 }
 
 Response V8RuntimeAgentImpl::getExceptionDetails(
-    const String16& errorObjectId,
+    const String8& errorObjectId,
     std::unique_ptr<protocol::Runtime::ExceptionDetails>*
         out_exceptionDetails) {
   InjectedScript::ObjectScope scope(m_session, errorObjectId);
@@ -1046,8 +1045,8 @@ Response V8RuntimeAgentImpl::getExceptionDetails(
   return Response::Success();
 }
 
-void V8RuntimeAgentImpl::bindingCalled(const String16& name,
-                                       const String16& payload,
+void V8RuntimeAgentImpl::bindingCalled(const String8& name,
+                                       const String8& payload,
                                        int executionContextId) {
   if (!m_activeBindings.count(name)) return;
   m_frontend.bindingCalled(name, payload, executionContextId);
@@ -1055,7 +1054,7 @@ void V8RuntimeAgentImpl::bindingCalled(const String16& name,
 }
 
 void V8RuntimeAgentImpl::addBindings(InspectedContext* context) {
-  const String16 contextName = context->humanReadableName();
+  const String8 contextName = context->humanReadableName();
   if (!m_enabled) return;
 
   protocol::DictionaryValue* globalBindings =
@@ -1169,11 +1168,11 @@ void V8RuntimeAgentImpl::reportExecutionContextCreated(
           .setOrigin(context->origin())
           .setUniqueId(context->uniqueId().toString())
           .build();
-  const String16& aux = context->auxData();
+  const String8& aux = context->auxData();
   if (!aux.isEmpty()) {
     std::vector<uint8_t> cbor;
     v8_crdtp::json::ConvertJSONToCBOR(
-        v8_crdtp::span<uint16_t>(aux.characters16(), aux.length()), &cbor);
+        v8_crdtp::span<uint8_t>(aux.characters8(), aux.length()), &cbor);
     description->setAuxData(protocol::DictionaryValue::cast(
         protocol::Value::parseBinary(cbor.data(), cbor.size())));
   }

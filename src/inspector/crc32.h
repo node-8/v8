@@ -5,12 +5,11 @@
 #ifndef V8_INSPECTOR_CRC32_H_
 #define V8_INSPECTOR_CRC32_H_
 
-#include "src/inspector/string-16.h"
+#include "src/inspector/string-8.h"
 
 namespace v8_inspector {
 
-int32_t computeCrc32(const String16&);
-
+int32_t computeCrc32(const String8&, bool legacy_utf16);
 }
 
 #endif  // V8_INSPECTOR_CRC32_H_

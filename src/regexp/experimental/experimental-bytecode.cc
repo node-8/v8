@@ -58,6 +58,8 @@ std::ostream& operator<<(std::ostream& os, const RegExpInstruction& inst) {
         case RegExpAssertion::Type::NON_BOUNDARY:
           os << "NON_BOUNDARY";
           break;
+        case RegExpAssertion::Type::NODE8_END_LITERAL:
+          UNREACHABLE();
       }
       break;
     case RegExpInstruction::FORK:

@@ -248,6 +248,7 @@ class Genesis {
   void InitializeGlobal(DirectHandle<JSGlobalObject> global_object,
                         DirectHandle<JSFunction> empty_function);
   void InitializeExperimentalGlobal();
+  void InitializeGlobal_utf8_string_semantics();
   void InitializeIteratorFunctions();
   void InitializeCallSiteBuiltins();
   void InitializeConsole(DirectHandle<JSObject> extras_binding);
@@ -5113,6 +5114,57 @@ void Genesis::InitializeExperimentalGlobal() {
   InitializeGlobal_sharedarraybuffer();
 }
 
+void Genesis::InitializeGlobal_utf8_string_semantics() {
+  if (!v8_flags.utf8_string_semantics) return;
+
+  DirectHandle<JSObject> prototype(
+      Cast<JSObject>(native_context()->string_function()->prototype()),
+      isolate());
+  const struct {
+    const char* name;
+    const char* alias;
+    Builtin original;
+    Builtin replacement;
+  } methods[] = {{"trim", nullptr, Builtin::kStringPrototypeTrim,
+                  Builtin::kStringPrototypeTrimUtf8},
+                 {"trimStart", "trimLeft", Builtin::kStringPrototypeTrimStart,
+                  Builtin::kStringPrototypeTrimStartUtf8},
+                 {"trimEnd", "trimRight", Builtin::kStringPrototypeTrimEnd,
+                  Builtin::kStringPrototypeTrimEndUtf8}};
+
+  for (const auto& method : methods) {
+    for (const char* name : {method.name, method.alias}) {
+      if (name == nullptr) continue;
+      DirectHandle<String> key = factory()->InternalizeUtf8String(name);
+      LookupIterator it(isolate(), prototype, key,
+                        LookupIterator::OWN_SKIP_INTERCEPTOR);
+      // A custom context snapshot may replace or delete a method. Do not
+      // invoke accessors or overwrite those application-owned properties.
+      if (it.state() != LookupIterator::DATA) continue;
+      DirectHandle<Object> value = it.GetDataValue();
+      if (!IsJSFunction(*value)) continue;
+      DirectHandle<JSFunction> function = Cast<JSFunction>(value);
+      DirectHandle<SharedFunctionInfo> shared(function->shared(), isolate());
+      if (!shared->HasBuiltinId() || shared->builtin_id() != method.original) {
+        continue;
+      }
+      // Snapshots may already capture this function (e.g. Node primordials).
+      // Preserve its identity and properties, but do not mutate shared or
+      // read-only snapshot metadata used by another context.
+      DirectHandle<SharedFunctionInfo> replacement =
+          factory()->CloneSharedFunctionInfo(shared);
+      replacement->set_builtin_id(method.replacement);
+      DCHECK_EQ(Builtins::GetFormalParameterCount(method.original),
+                Builtins::GetFormalParameterCount(method.replacement));
+      function->set_shared(*replacement);
+      function->UpdateCode(isolate(),
+                            isolate()->builtins()->code(method.replacement));
+    }
+  }
+  DCHECK(prototype->HasFastProperties());
+  native_context()->set_string_function_prototype_map(prototype->map());
+}
+
 namespace {
 class TryCallScope {
  public:
@@ -7125,6 +7177,9 @@ Genesis::Genesis(Isolate* isolate,
     native_context()->set_string_function_prototype_map(
         string_function_prototype->map());
   }
+
+  // Byte semantics also apply while an embedder builds a custom snapshot.
+  InitializeGlobal_utf8_string_semantics();
 
   if (v8_flags.disallow_code_generation_from_strings) {
     native_context()->set_allow_code_gen_from_strings(

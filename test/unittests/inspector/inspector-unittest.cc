@@ -14,10 +14,10 @@
 #include "test/unittests/test-utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-using v8_inspector::String16;
+using v8_inspector::String8;
 using v8_inspector::StringBuffer;
 using v8_inspector::StringView;
-using v8_inspector::toString16;
+using v8_inspector::toString8;
 using v8_inspector::toStringView;
 using v8_inspector::V8ContextInfo;
 using v8_inspector::V8Inspector;
@@ -224,12 +224,12 @@ class TestChannel : public V8Inspector::Channel {
   void sendResponse(int callId,
                     std::unique_ptr<StringBuffer> message) override {
     CHECK_EQ(callId, 1);
-    CHECK_NE(toString16(message->string()).find(expected_response_matcher_),
-             String16::kNotFound);
+    CHECK_NE(toString8(message->string()).find(expected_response_matcher_),
+             String8::kNotFound);
   }
   void sendNotification(std::unique_ptr<StringBuffer> message) override {}
   void flushProtocolNotifications() override {}
-  v8_inspector::String16 expected_response_matcher_;
+  v8_inspector::String8 expected_response_matcher_;
 };
 
 TEST_F(InspectorTest, NoConsoleAPIForUntrustedClient) {

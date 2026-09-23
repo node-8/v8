@@ -1511,11 +1511,15 @@ DirectHandle<HeapObject> RegExpMacroAssemblerARM64::GetCode(
         // Offset from the end is zero if we already reached the end.
         __ Cbz(current_input_offset(), &return_w0);
         // Advance current position after a zero-length match.
-        Label advance;
-        __ bind(&advance);
-        __ Add(current_input_offset(), current_input_offset(),
-               Operand((mode() == UC16) ? 2 : 1));
-        if (global_unicode()) CheckNotInSurrogatePair(0, &advance);
+        if (global_utf8()) {
+          AdvanceUtf8Position();
+        } else {
+          Label advance;
+          __ bind(&advance);
+          __ Add(current_input_offset(), current_input_offset(),
+                 Operand((mode() == UC16) ? 2 : 1));
+          if (global_unicode()) CheckNotInSurrogatePair(0, &advance);
+        }
       }
 
       __ B(&load_char_start_regexp);

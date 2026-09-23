@@ -67,39 +67,50 @@ anchoredAfterZero.lastIndex = 1;
 assertNull(anchoredAfterZero.exec(subject));
 assertEquals(0, anchoredAfterZero.lastIndex);
 
-// A malformed prefix retains byte offsets for later alternatives. Making a raw
-// malformed byte match U+FFFD inside a positive class is separate future work.
+// A malformed prefix retains byte offsets for later alternatives. The fully
+// anchored finite replacement-class shape now matches maximal subparts.
 assertMatchIndices(
     [[1, 5], undefined, undefined], expression(mixedExact),
     raw(0x80) + 'none');
 const malformedClass = '[\ufffd\u00e9]';
-assertNull(expression('((' + malformedClass + '){2})')
-               .exec('key=' + raw(0x80) + eAcute + '!'));
+assertMatchIndices(
+    [[0, 8], [4, 7], [5, 7]],
+    expression('((' + malformedClass + '){2})', '$'),
+    'key=' + raw(0x80) + eAcute + '!');
 
-// End-only, multiline, other assertion forms, anchored excluded unbounded
-// topologies, and every adjacent selector remain on their prior paths.
-assertNull(
-    new RegExp('(?:key=' + mixedExact + '!$|none)', 'du').exec(subject));
+// Generic composition handles end-only anchors and further capture topologies.
+assertMatchIndices(
+    [[0, 10], [4, 9], [6, 9]],
+    new RegExp('(?:key=' + mixedExact + '!$|none)', 'du'), subject);
+// Multiline and word boundaries remain separate migrations.
 assertNull(expression(mixedExact, '', 'dmu').exec(subject));
 assertNull(
     new RegExp('(?:^\\bkey=' + mixedExact + '!|none)', 'du').exec(subject));
-assertNull(
-    new RegExp('(?:^(?=key=)key=' + mixedExact + '!|none)', 'du')
-        .exec(subject));
-assertNull(expression('((' + classSource + '+))', '$').exec(subject));
-assertNull(expression('((' + classSource + ')+)', '$').exec(subject));
-assertNull(
-    expression('((' + classSource + '){1})').exec('key=' + eAcute + '!'));
-assertNull(
-    new RegExp('(?:none|^key=' + mixedExact + '!)', 'du').exec(subject));
-assertNull(
+// The lookahead is local to the anchored branch and consumes nothing itself.
+assertEquals([subject, field, cjk], Array.from(assertMatchIndices(
+    [[0, 10], [4, 9], [6, 9]],
+    new RegExp('(?:^(?=key=)key=' + mixedExact + '!|none)', 'du'), subject)));
+assertMatchIndices(
+    [[0, 10], [4, 9], [4, 9]], expression('((' + classSource + '+))', '$'), subject);
+assertMatchIndices(
+    [[0, 10], [4, 9], [6, 9]], expression('((' + classSource + ')+)', '$'), subject);
+assertMatchIndices(
+    [[0, 7], [4, 6], [4, 6]], expression('((' + classSource + '){1})'),
+    'key=' + eAcute + '!');
+assertMatchIndices(
+    [[0, 10], [4, 9], [6, 9]],
+    new RegExp('(?:none|^key=' + mixedExact + '!)', 'du'), subject);
+assertMatchIndices(
+    [[0, 10], [4, 9], undefined],
     new RegExp(
         '(?:^key=(' + classSource + '{2})!|other=(' + classSource + '{2})!)',
-        'du')
-        .exec(subject));
-assertNull(
-    new RegExp('((?:^key=' + mixedExact + '!|none))', 'du').exec(subject));
-assertNull(expression(mixedExact, '', 'duy').exec(subject));
+        'du'), subject);
+assertMatchIndices(
+    [[0, 10], [0, 10], [4, 9], [6, 9]],
+    new RegExp('((?:^key=' + mixedExact + '!|none))', 'du'), subject);
+assertMatchIndices(
+    [[0, 10], [4, 9], [6, 9]], expression(mixedExact, '', 'duy'), subject);
+// Ignore-case and modifier groups remain outside this generic lowering.
 assertNull(expression(mixedExact, '', 'dui').exec(subject));
 assertNull(
     new RegExp('(?i:^key=' + mixedExact + '!|none)', 'du').exec(subject));

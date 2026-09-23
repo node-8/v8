@@ -12,7 +12,7 @@
 #include "src/base/macros.h"
 #include "src/inspector/protocol/Protocol.h"
 #include "src/inspector/protocol/Runtime.h"
-#include "src/inspector/string-16.h"
+#include "src/inspector/string-8.h"
 #include "src/inspector/v8-debugger.h"
 #include "src/inspector/v8-deep-serializer.h"
 
@@ -21,19 +21,19 @@ namespace v8_inspector {
 class ValueMirror;
 
 struct PrivatePropertyMirror {
-  String16 name;
+  String8 name;
   std::unique_ptr<ValueMirror> value;
   std::unique_ptr<ValueMirror> getter;
   std::unique_ptr<ValueMirror> setter;
 };
 
 struct InternalPropertyMirror {
-  String16 name;
+  String8 name;
   std::unique_ptr<ValueMirror> value;
 };
 
 struct PropertyMirror {
-  String16 name;
+  String8 name;
   bool writable;
   bool configurable;
   bool enumerable;
@@ -57,7 +57,7 @@ class ValueMirror {
       v8::Local<v8::Context> context, const WrapOptions& wrapOptions,
       std::unique_ptr<protocol::Runtime::RemoteObject>* result) const = 0;
   virtual void buildPropertyPreview(
-      v8::Local<v8::Context> context, const String16& name,
+      v8::Local<v8::Context> context, const String8& name,
       std::unique_ptr<protocol::Runtime::PropertyPreview>*) const {}
   virtual void buildObjectPreview(
       v8::Local<v8::Context> context, bool generatePreviewForTable,

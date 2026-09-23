@@ -152,12 +152,20 @@ for (const sample of oracleCases) {
       sample.prefix + sample.field + sample.tail);
 }
 
-// Adjacent unsupported selectors stay unchanged.
-assertNull(regexp('', mixedSource, tail33).exec(field + tail33));
-assertNull(
-    regexp(prefix33, mixedSource, tail17).exec(prefix33 + field + tail17));
-assertNull(regexp('', '((' + classSource + '+))', tail17).exec(field + tail17));
-assertNull(regexp('', mixedSource, String.fromCodePoint(0x4e2d))
-               .exec(field + String.fromCodePoint(0x4e2d)));
-assertNull(regexp('', mixedSource, tail17, 'duy').exec(field + tail17));
+// Generic composition also covers the neighbors of the optimized selectors.
+assertMatchIndices(
+    [[0, 37], [0, 4], [2, 4]], regexp('', mixedSource, tail33), field + tail33);
+assertMatchIndices(
+    [[0, 54], [33, 37], [35, 37]], regexp(prefix33, mixedSource, tail17),
+    prefix33 + field + tail17);
+assertMatchIndices(
+    [[0, 21], [0, 4], [0, 4]], regexp('', '((' + classSource + '+))', tail17),
+    field + tail17);
+assertMatchIndices(
+    [[0, 7], [0, 4], [2, 4]],
+    regexp('', mixedSource, String.fromCodePoint(0x4e2d)),
+    field + String.fromCodePoint(0x4e2d));
+assertMatchIndices(
+    [[0, 21], [0, 4], [2, 4]], regexp('', mixedSource, tail17, 'duy'), field + tail17);
+// Ignore-case composition remains a separate migration.
 assertNull(regexp('', mixedSource, tail17, 'dui').exec(field + tail17));

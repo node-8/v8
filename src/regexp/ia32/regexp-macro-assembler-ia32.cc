@@ -952,19 +952,24 @@ DirectHandle<HeapObject> RegExpMacroAssemblerIA32::GetCode(
         // edx: capture start index
         __ cmp(edi, edx);
         // Not a zero-length match, restart.
-        __ j(not_equal, &reload_string_start_minus_one, Label::kNear);
+        __ j(not_equal, &reload_string_start_minus_one,
+             global_utf8() ? Label::kFar : Label::kNear);
         // edi (offset from the end) is zero if we already reached the end.
         __ test(edi, edi);
-        __ j(zero, &exit_label_, Label::kNear);
+        __ j(zero, &exit_label_, global_utf8() ? Label::kFar : Label::kNear);
         // Advance current position after a zero-length match.
-        Label advance;
-        __ bind(&advance);
-        if (mode() == UC16) {
-          __ add(edi, Immediate(2));
+        if (global_utf8()) {
+          AdvanceUtf8Position();
         } else {
-          __ inc(edi);
+          Label advance;
+          __ bind(&advance);
+          if (mode() == UC16) {
+            __ add(edi, Immediate(2));
+          } else {
+            __ inc(edi);
+          }
+          if (global_unicode()) CheckNotInSurrogatePair(0, &advance);
         }
-        if (global_unicode()) CheckNotInSurrogatePair(0, &advance);
       }
 
       __ bind(&reload_string_start_minus_one);

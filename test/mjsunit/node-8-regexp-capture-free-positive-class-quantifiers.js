@@ -82,7 +82,7 @@ assertEquals(4, continuation.lastIndex);
 
 const empty = Array.from(
     (eAcute + 'x').matchAll(/[\u00e9-\u00eb]{0,2}?/dgu));
-assertEquals([[0, 0], [1, 1], [2, 2], [3, 3]],
+assertEquals([[0, 0], [2, 2], [3, 3]],
              empty.map(match => match.indices[0]));
 
 function decodeScalar(input, position) {

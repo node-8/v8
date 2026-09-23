@@ -29,8 +29,8 @@ std::unique_ptr<protocol::Value> DescriptionForDate(
       toProtocolString(isolate, dateISOString));
 }
 
-String16 DescriptionForRegExpFlags(v8::Local<v8::RegExp> value) {
-  String16Builder resultStringBuilder;
+String8 DescriptionForRegExpFlags(v8::Local<v8::RegExp> value) {
+  String8Builder resultStringBuilder;
   v8::RegExp::Flags flags = value->GetFlags();
   if (flags & v8::RegExp::Flags::kHasIndices) resultStringBuilder.append('d');
   if (flags & v8::RegExp::Flags::kGlobal) resultStringBuilder.append('g');
@@ -60,7 +60,7 @@ Response SerializeRegexp(v8::Local<v8::RegExp> value,
                         protocol::StringValue::create(toProtocolString(
                             v8::Isolate::GetCurrent(), value->GetSource())));
 
-  String16 flags = DescriptionForRegExpFlags(value);
+  String8 flags = DescriptionForRegExpFlags(value);
   if (!flags.isEmpty()) {
     resultValue->setValue(protocol::String("flags"),
                           protocol::StringValue::create(flags));

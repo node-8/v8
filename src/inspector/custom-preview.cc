@@ -44,11 +44,11 @@ void reportError(v8::Local<v8::Context> context, const v8::TryCatch& tryCatch) {
   storage->addMessage(V8ConsoleMessage::createForConsoleAPI(
       context, contextId, groupId, inspector,
       inspector->client()->currentTimeMS(), ConsoleAPIType::kError,
-      {arguments.begin(), arguments.end()}, String16(), nullptr));
+      {arguments.begin(), arguments.end()}, String8(), nullptr));
 }
 
 void reportError(v8::Local<v8::Context> context, const v8::TryCatch& tryCatch,
-                 const String16& message) {
+                 const String8& message) {
   v8::Isolate* isolate = v8::Isolate::GetCurrent();
   isolate->ThrowException(toV8String(isolate, message));
   reportError(context, tryCatch);
@@ -65,7 +65,7 @@ InjectedScript* getInjectedScript(v8::Local<v8::Context> context,
   return inspectedContext->getInjectedScript(sessionId);
 }
 
-bool substituteObjectTags(int sessionId, const String16& groupName,
+bool substituteObjectTags(int sessionId, const String8& groupName,
                           v8::Local<v8::Context> context,
                           v8::Local<v8::Array> jsonML, int maxDepth) {
   if (!jsonML->Length()) return true;
@@ -257,7 +257,7 @@ void bodyCallback(const v8::FunctionCallbackInfo<v8::Value>& info) {
 }  // anonymous namespace
 
 void generateCustomPreview(v8::Isolate* isolate, int sessionId,
-                           const String16& groupName,
+                           const String8& groupName,
                            v8::Local<v8::Object> object,
                            v8::MaybeLocal<v8::Value> maybeConfig, int maxDepth,
                            std::unique_ptr<CustomPreview>* preview) {

@@ -74,8 +74,8 @@ class V8InspectorImpl : public V8Inspector {
   v8::MaybeLocal<v8::Value> compileAndRunInternalScript(v8::Local<v8::Context>,
                                                         v8::Local<v8::String>);
   v8::MaybeLocal<v8::Script> compileScript(v8::Local<v8::Context>,
-                                           const String16& code,
-                                           const String16& fileName);
+                                           const String8& code,
+                                           const String8& fileName);
   v8::MaybeLocal<v8::Context> regexContext();
   v8::MaybeLocal<v8::Context> exceptionMetaDataContext();
 

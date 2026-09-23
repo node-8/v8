@@ -32,13 +32,14 @@ static const char preciseCoverageAllowTriggeredUpdates[] =
 
 namespace {
 
-String16 resourceNameToUrl(V8InspectorImpl* inspector,
-                           v8::Local<v8::String> v8Name) {
-  String16 name = toProtocolString(inspector->isolate(), v8Name);
+String8 resourceNameToUrl(V8InspectorImpl* inspector,
+                          v8::Local<v8::String> v8Name) {
+  String8 name = toProtocolString(inspector->isolate(), v8Name);
   if (!inspector) return name;
+  ScopedStringView nameView(name);
   std::unique_ptr<StringBuffer> url =
-      inspector->client()->resourceNameToUrl(toStringView(name));
-  return url ? toString16(url->string()) : name;
+      inspector->client()->resourceNameToUrl(nameView.view());
+  return url ? toString8(url->string()) : name;
 }
 
 std::unique_ptr<protocol::Array<protocol::Profiler::PositionTickInfo>>
@@ -68,7 +69,7 @@ std::unique_ptr<protocol::Profiler::ProfileNode> buildInspectorObjectFor(
   auto callFrame =
       protocol::Runtime::CallFrame::create()
           .setFunctionName(toProtocolString(isolate, node->GetFunctionName()))
-          .setScriptId(String16::fromInteger(node->GetScriptId()))
+          .setScriptId(String8::fromInteger(node->GetScriptId()))
           .setUrl(resourceNameToUrl(inspector, node->GetScriptResourceName()))
           .setLineNumber(node->GetLineNumber() - 1)
           .setColumnNumber(node->GetColumnNumber() - 1)
@@ -148,7 +149,7 @@ std::unique_ptr<protocol::Debugger::Location> currentDebugLocation(
   CHECK(stackTrace);
   CHECK(!stackTrace->isEmpty());
   return protocol::Debugger::Location::create()
-      .setScriptId(String16::fromInteger(stackTrace->topScriptId()))
+      .setScriptId(String8::fromInteger(stackTrace->topScriptId()))
       .setLineNumber(stackTrace->topLineNumber())
       .setColumnNumber(stackTrace->topColumnNumber())
       .build();
@@ -160,10 +161,10 @@ int s_lastProfileId = 0;
 
 class V8ProfilerAgentImpl::ProfileDescriptor {
  public:
-  ProfileDescriptor(const String16& id, const String16& title)
+  ProfileDescriptor(const String8& id, const String8& title)
       : m_id(id), m_title(title) {}
-  String16 m_id;
-  String16 m_title;
+  String8 m_id;
+  String8 m_title;
 };
 
 V8ProfilerAgentImpl::V8ProfilerAgentImpl(
@@ -178,19 +179,19 @@ V8ProfilerAgentImpl::~V8ProfilerAgentImpl() {
   if (m_profiler) m_profiler->Dispose();
 }
 
-void V8ProfilerAgentImpl::consoleProfile(const String16& title) {
+void V8ProfilerAgentImpl::consoleProfile(const String8& title) {
   if (!m_enabled) return;
-  String16 id = nextProfileId();
+  String8 id = nextProfileId();
   m_startedProfiles.push_back(ProfileDescriptor(id, title));
   startProfiling(id);
   m_frontend.consoleProfileStarted(
       id, currentDebugLocation(m_session->inspector()), title);
 }
 
-void V8ProfilerAgentImpl::consoleProfileEnd(const String16& title) {
+void V8ProfilerAgentImpl::consoleProfileEnd(const String8& title) {
   if (!m_enabled) return;
-  String16 id;
-  String16 resolvedTitle;
+  String8 id;
+  String8 resolvedTitle;
   // Take last started profile if no title was passed.
   if (title.isEmpty()) {
     if (m_startedProfiles.empty()) return;
@@ -296,7 +297,7 @@ Response V8ProfilerAgentImpl::stop(
     *profile = std::move(cpuProfile);
     if (!*profile) return Response::ServerError("Profile is not found");
   }
-  m_frontendInitiatedProfileId = String16();
+  m_frontendInitiatedProfileId = String8();
   m_state->setBoolean(ProfilerAgentState::userInitiatedProfiling, false);
   return Response::Success();
 }
@@ -390,7 +391,7 @@ Response coverageToProtocol(
               .setIsBlockCoverage(function_data.HasBlockCoverage())
               .build());
     }
-    String16 url;
+    String8 url;
     v8::Local<v8::String> name;
     if (script->SourceURL().ToLocal(&name) && name->Length()) {
       url = toProtocolString(isolate, name);
@@ -398,7 +399,7 @@ Response coverageToProtocol(
       url = resourceNameToUrl(inspector, name);
     }
     result->emplace_back(protocol::Profiler::ScriptCoverage::create()
-                             .setScriptId(String16::fromInteger(script->Id()))
+                             .setScriptId(String8::fromInteger(script->Id()))
                              .setUrl(url)
                              .setFunctions(std::move(functions))
                              .build());
@@ -423,7 +424,7 @@ Response V8ProfilerAgentImpl::takePreciseCoverage(
 }
 
 void V8ProfilerAgentImpl::triggerPreciseCoverageDeltaUpdate(
-    const String16& occasion) {
+    const String8& occasion) {
   if (!m_state->booleanProperty(ProfilerAgentState::preciseCoverageStarted,
                                 false)) {
     return;
@@ -450,12 +451,12 @@ Response V8ProfilerAgentImpl::getBestEffortCoverage(
   return coverageToProtocol(m_session->inspector(), coverage, out_result);
 }
 
-String16 V8ProfilerAgentImpl::nextProfileId() {
-  return String16::fromInteger(
+String8 V8ProfilerAgentImpl::nextProfileId() {
+  return String8::fromInteger(
       v8::base::Relaxed_AtomicIncrement(&s_lastProfileId, 1));
 }
 
-void V8ProfilerAgentImpl::startProfiling(const String16& title) {
+void V8ProfilerAgentImpl::startProfiling(const String8& title) {
   v8::HandleScope handleScope(m_isolate);
   if (!m_startedProfilesCount) {
     DCHECK(!m_profiler);
@@ -473,7 +474,7 @@ void V8ProfilerAgentImpl::startProfiling(const String16& title) {
 }
 
 std::unique_ptr<protocol::Profiler::Profile> V8ProfilerAgentImpl::stopProfiling(
-    const String16& title, bool serialize) {
+    const String8& title, bool serialize) {
   v8::HandleScope handleScope(m_isolate);
   v8::CpuProfile* profile =
       m_profiler->StopProfiling(toV8String(m_isolate, title));

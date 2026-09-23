@@ -127,6 +127,9 @@ void* RegExpAstNodePrinter::VisitAssertion(RegExpAssertion* that, void* data) {
     case RegExpAssertion::Type::NON_BOUNDARY:
       os() << "@B";
       break;
+    case RegExpAssertion::Type::NODE8_END_LITERAL:
+      os() << "@node8-end-literal";
+      break;
   }
   return nullptr;
 }

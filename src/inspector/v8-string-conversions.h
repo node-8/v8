@@ -9,8 +9,8 @@
 #include <cstdint>
 #include <string>
 
-// Conversion routines between UT8 and UTF16, used by string-16.{h,cc}. You may
-// want to use string-16.h directly rather than these.
+// Legacy conversion helpers used by inspector_protocol's test platform.
+// Inspector-owned protocol strings use String8 instead.
 namespace v8_inspector {
 std::basic_string<char16_t> UTF8ToUTF16(const char* stringStart, size_t length);
 std::string UTF16ToUTF8(const char16_t* stringStart, size_t length);

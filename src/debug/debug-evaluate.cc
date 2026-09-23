@@ -844,6 +844,9 @@ DebugInfo::SideEffectState BuiltinGetSideEffectState(Builtin id) {
     case Builtin::kStringPrototypeTrim:
     case Builtin::kStringPrototypeTrimEnd:
     case Builtin::kStringPrototypeTrimStart:
+    case Builtin::kStringPrototypeTrimUtf8:
+    case Builtin::kStringPrototypeTrimEndUtf8:
+    case Builtin::kStringPrototypeTrimStartUtf8:
     case Builtin::kStringPrototypeValueOf:
     case Builtin::kStringToNumber:
     case Builtin::kStringSubstring:

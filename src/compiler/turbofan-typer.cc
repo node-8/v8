@@ -1992,6 +1992,9 @@ Type Typer::Visitor::JSCallTyper(Type fun, Typer* t) {
     case Builtin::kStringPrototypeTrim:
     case Builtin::kStringPrototypeTrimEnd:
     case Builtin::kStringPrototypeTrimStart:
+    case Builtin::kStringPrototypeTrimUtf8:
+    case Builtin::kStringPrototypeTrimEndUtf8:
+    case Builtin::kStringPrototypeTrimStartUtf8:
     case Builtin::kStringPrototypeValueOf:
       return Type::String();
 

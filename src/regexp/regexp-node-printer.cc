@@ -209,6 +209,9 @@ void RegExpNodePrinter<RegExpNode>::VisitAssertion(AssertionNode* node) {
     case AssertionNode::AFTER_NEWLINE:
       os() << "after newline";
       break;
+    case AssertionNode::NODE8_END_LITERAL:
+      os() << "node-8 end literal";
+      break;
   }
   PrintSuccess(node);
 }
@@ -231,7 +234,9 @@ void RegExpNodePrinter<RegExpNode>::VisitText(TextNode* node) {
 
 void RegExpNodePrinter<RegExpNode>::VisitWtf8Scalar(Wtf8ScalarNode* node) {
   PrintNodeLabel(node, "Wtf8Scalar");
-  if (node->is_positive_class()) {
+  if (node->positive_packed_class_plan() != nullptr) {
+    os() << "positive packed scalar class";
+  } else if (node->is_positive_class()) {
     os() << "positive ASCII ranges; non-ASCII ";
     PrintNodeLabel(node->positive_non_ascii_node());
   } else {

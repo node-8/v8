@@ -35,7 +35,7 @@ String Binary::toBase64() const {
   const char* table =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   if (size() == 0) return {};
-  std::basic_string<UChar> result;
+  std::string result;
   result.reserve(4 * ((size() + 2) / 3));
   uint8_t last = 0;
   for (size_t n = 0; n < size();) {
@@ -52,7 +52,7 @@ String Binary::toBase64() const {
   }
   result.push_back(table[last]);
   while (result.size() % 4 > 0) result.push_back('=');
-  return String16(std::move(result));
+  return String8(std::move(result));
 }
 
 /* static */
@@ -99,24 +99,49 @@ Binary Binary::fromBase64(const String& base64, bool* success) {
 }
 }  // namespace protocol
 
-v8::Local<v8::String> toV8String(v8::Isolate* isolate, const String16& string) {
+bool usesByteStringSemantics(v8::Isolate* isolate) {
+  v8::String::ValueView view(isolate, v8::String::Empty(isolate));
+  return view.uses_utf8_semantics();
+}
+
+size_t engineStringLength(v8::Isolate* isolate, const String8& string) {
+  return usesByteStringSemantics(isolate) ? string.length()
+                                          : string.utf16Length();
+}
+
+size_t protocolByteOffset(v8::Isolate* isolate, const String8& string,
+                          size_t engine_offset) {
+  return usesByteStringSemantics(isolate)
+             ? std::min(engine_offset, string.length())
+             : string.byteOffsetForUTF16(engine_offset);
+}
+
+namespace {
+v8::Local<v8::String> protocolToV8String(v8::Isolate* isolate,
+                                         const String8& string,
+                                         v8::NewStringType type) {
   if (string.isEmpty()) return v8::String::Empty(isolate);
   DCHECK_GT(v8::String::kMaxLength, string.length());
-  return v8::String::NewFromTwoByte(
-             isolate, reinterpret_cast<const uint16_t*>(string.characters16()),
-             v8::NewStringType::kNormal, static_cast<int>(string.length()))
+  if (usesByteStringSemantics(isolate)) {
+    return v8::String::NewFromBytes(isolate, string.characters8(), type,
+                                    static_cast<int>(string.length()))
+        .ToLocalChecked();
+  }
+  // The stock engine accepts UTF-16, including isolated surrogate code units.
+  auto units = string.toUTF16();
+  return v8::String::NewFromTwoByte(isolate, units.data(), type,
+                                    static_cast<int>(units.size()))
       .ToLocalChecked();
+}
+}  // namespace
+
+v8::Local<v8::String> toV8String(v8::Isolate* isolate, const String8& string) {
+  return protocolToV8String(isolate, string, v8::NewStringType::kNormal);
 }
 
 v8::Local<v8::String> toV8StringInternalized(v8::Isolate* isolate,
-                                             const String16& string) {
-  if (string.isEmpty()) return v8::String::Empty(isolate);
-  DCHECK_GT(v8::String::kMaxLength, string.length());
-  return v8::String::NewFromTwoByte(
-             isolate, reinterpret_cast<const uint16_t*>(string.characters16()),
-             v8::NewStringType::kInternalized,
-             static_cast<int>(string.length()))
-      .ToLocalChecked();
+                                             const String8& string) {
+  return protocolToV8String(isolate, string, v8::NewStringType::kInternalized);
 }
 
 v8::Local<v8::String> toV8StringInternalized(v8::Isolate* isolate,
@@ -130,9 +155,9 @@ v8::Local<v8::String> toV8String(v8::Isolate* isolate,
   if (!string.length()) return v8::String::Empty(isolate);
   DCHECK_GT(v8::String::kMaxLength, string.length());
   if (string.is8Bit())
-    return v8::String::NewFromOneByte(
-               isolate, reinterpret_cast<const uint8_t*>(string.characters8()),
-               v8::NewStringType::kNormal, static_cast<int>(string.length()))
+    return v8::String::NewFromOneByte(isolate, string.characters8(),
+                                      v8::NewStringType::kNormal,
+                                      static_cast<int>(string.length()))
         .ToLocalChecked();
   return v8::String::NewFromTwoByte(
              isolate, reinterpret_cast<const uint16_t*>(string.characters16()),
@@ -140,31 +165,36 @@ v8::Local<v8::String> toV8String(v8::Isolate* isolate,
       .ToLocalChecked();
 }
 
-String16 toProtocolString(v8::Isolate* isolate, v8::Local<v8::String> value) {
-  if (value.IsEmpty() || value->IsNullOrUndefined()) return String16();
-  uint32_t length = value->Length();
-  std::unique_ptr<UChar[]> buffer(new UChar[length]);
-  value->WriteV2(isolate, 0, length, reinterpret_cast<uint16_t*>(buffer.get()));
-  return String16(buffer.get(), length);
+String8 toProtocolString(v8::Isolate* isolate, v8::Local<v8::String> value) {
+  if (value.IsEmpty() || value->IsNullOrUndefined()) return String8();
+  return toProtocolString(isolate, value, 0, value->Length());
 }
 
-String16 toProtocolStringWithTypeCheck(v8::Isolate* isolate,
-                                       v8::Local<v8::Value> value) {
-  if (value.IsEmpty() || !value->IsString()) return String16();
+String8 toProtocolString(v8::Isolate* isolate, v8::Local<v8::String> value,
+                         size_t offset, size_t length) {
+  v8::String::ValueView view(isolate, value);
+  DCHECK_LE(offset, view.length());
+  DCHECK_LE(length, view.length() - offset);
+  if (!length) return String8();
+  if (view.uses_utf8_semantics()) {
+    return String8::fromUTF8Scalar(view.data8() + offset, length);
+  }
+  return view.is_one_byte()
+             ? String8::fromLatin1(view.data8() + offset, length)
+             : String8::fromUTF16(view.data16() + offset, length);
+}
+
+String8 toProtocolStringWithTypeCheck(v8::Isolate* isolate,
+                                      v8::Local<v8::Value> value) {
+  if (value.IsEmpty() || !value->IsString()) return String8();
   return toProtocolString(isolate, value.As<v8::String>());
 }
 
-String16 toString16(const StringView& string) {
-  if (!string.length()) return String16();
+String8 toString8(const StringView& string) {
+  if (!string.length()) return String8();
   if (string.is8Bit())
-    return String16(reinterpret_cast<const char*>(string.characters8()),
-                    string.length());
-  return String16(string.characters16(), string.length());
-}
-
-StringView toStringView(const String16& string) {
-  if (string.isEmpty()) return StringView();
-  return StringView(string.characters16(), string.length());
+    return String8::fromLatin1(string.characters8(), string.length());
+  return String8::fromUTF16(string.characters16(), string.length());
 }
 
 bool stringViewStartsWith(const StringView& string, const char* prefix) {
@@ -202,17 +232,18 @@ class StringBuffer8 : public StringBuffer {
   std::vector<uint8_t> data_;
 };
 
-// Contains a 16 bit string (String16).
+// Owns a legacy API result, never used as protocol storage.
 class StringBuffer16 : public StringBuffer {
  public:
-  explicit StringBuffer16(String16 data) : data_(std::move(data)) {}
+  explicit StringBuffer16(std::vector<uint16_t> data)
+      : data_(std::move(data)) {}
 
   StringView string() const override {
-    return StringView(data_.characters16(), data_.length());
+    return StringView(data_.data(), data_.size());
   }
 
  private:
-  String16 data_;
+  std::vector<uint16_t> data_;
 };
 }  // namespace
 
@@ -223,13 +254,13 @@ std::unique_ptr<StringBuffer> StringBuffer::create(StringView string) {
     return std::make_unique<StringBuffer8>(std::vector<uint8_t>(
         string.characters8(), string.characters8() + string.length()));
   }
-  return std::make_unique<StringBuffer16>(
-      String16(string.characters16(), string.length()));
+  return std::make_unique<StringBuffer16>(std::vector<uint16_t>(
+      string.characters16(), string.characters16() + string.length()));
 }
 
-std::unique_ptr<StringBuffer> StringBufferFrom(String16 str) {
+std::unique_ptr<StringBuffer> StringBufferFrom(String8 str) {
   if (str.isEmpty()) return std::make_unique<EmptyStringBuffer>();
-  return std::make_unique<StringBuffer16>(std::move(str));
+  return std::make_unique<StringBuffer16>(str.toUTF16());
 }
 
 std::unique_ptr<StringBuffer> StringBufferFrom(std::vector<uint8_t> str) {
@@ -237,8 +268,8 @@ std::unique_ptr<StringBuffer> StringBufferFrom(std::vector<uint8_t> str) {
   return std::make_unique<StringBuffer8>(std::move(str));
 }
 
-String16 stackTraceIdToString(uintptr_t id) {
-  String16Builder builder;
+String8 stackTraceIdToString(uintptr_t id) {
+  String8Builder builder;
   builder.appendNumber(static_cast<size_t>(id));
   return builder.toString();
 }
@@ -247,13 +278,13 @@ String16 stackTraceIdToString(uintptr_t id) {
 
 namespace v8_crdtp {
 
-using v8_inspector::String16;
+using v8_inspector::String8;
 using v8_inspector::protocol::Binary;
 using v8_inspector::protocol::StringUtil;
 
 // static
-bool ProtocolTypeTraits<String16>::Deserialize(DeserializerState* state,
-                                               String16* value) {
+bool ProtocolTypeTraits<String8>::Deserialize(DeserializerState* state,
+                                              String8* value) {
   auto* tokenizer = state->tokenizer();
   if (tokenizer->TokenTag() == cbor::CBORTokenTag::STRING8) {
     const auto str = tokenizer->GetString8();
@@ -271,12 +302,10 @@ bool ProtocolTypeTraits<String16>::Deserialize(DeserializerState* state,
 }
 
 // static
-void ProtocolTypeTraits<String16>::Serialize(const String16& value,
-                                             std::vector<uint8_t>* bytes) {
-  cbor::EncodeFromUTF16(
-      span<uint16_t>(reinterpret_cast<const uint16_t*>(value.characters16()),
-                     value.length()),
-      bytes);
+void ProtocolTypeTraits<String8>::Serialize(const String8& value,
+                                            std::vector<uint8_t>* bytes) {
+  cbor::EncodeString8(span<uint8_t>(value.characters8(), value.length()),
+                      bytes);
 }
 
 // static

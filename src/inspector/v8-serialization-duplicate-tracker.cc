@@ -27,7 +27,7 @@ V8SerializationDuplicateTracker::LinkExistingOrCreate(
   } else {
     *isKnown = true;
 
-    String16 type;
+    String8 type;
     maybeKnownSerializedValue->getString("type", &type);
     result->setString("type", type);
 

@@ -13,6 +13,8 @@ include_rules = [
   "+src/base/numerics/safe_conversions.h",
   "+src/base/template-utils.h",
   "+src/numbers/conversions.h",
+  "+src/strings/unicode-decoder.h",
+  "+src/strings/unicode-inl.h",
   "+src/inspector",
   "+src/tracing",
   "+src/debug/debug-interface.h",

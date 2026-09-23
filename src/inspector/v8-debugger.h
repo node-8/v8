@@ -84,7 +84,7 @@ class V8Debugger : public v8::debug::DebugDelegate,
   Response continueToLocation(int targetContextGroupId,
                               V8DebuggerScript* script,
                               std::unique_ptr<protocol::Debugger::Location>,
-                              const String16& targetCallFramess);
+                              const String8& targetCallFramess);
   bool restartFrame(int targetContextGroupId, int callFrameOrdinal);
 
   // Each script inherits debug data from v8::Context where it has been
@@ -119,8 +119,7 @@ class V8Debugger : public v8::debug::DebugDelegate,
   v8::Local<v8::Array> queryObjects(v8::Local<v8::Context> context,
                                     v8::Local<v8::Object> prototype);
 
-  void asyncTaskScheduled(const StringView& taskName, void* task,
-                          bool recurring);
+  void asyncTaskScheduled(const String8& taskName, void* task, bool recurring);
   void asyncTaskCanceled(void* task);
   void asyncTaskStarted(void* task);
   void asyncTaskFinished(void* task);
@@ -189,7 +188,7 @@ class V8Debugger : public v8::debug::DebugDelegate,
   v8::MaybeLocal<v8::Array> privateMethods(v8::Local<v8::Context> context,
                                            v8::Local<v8::Value> value);
 
-  void asyncTaskScheduledForStack(const StringView& taskName, void* task,
+  void asyncTaskScheduledForStack(const String8& taskName, void* task,
                                   bool recurring, bool skipTopFrame = false);
   void asyncTaskCanceledForStack(void* task);
   void asyncTaskStartedForStack(void* task);
@@ -246,7 +245,7 @@ class V8Debugger : public v8::debug::DebugDelegate,
   bool m_instrumentationPause = false;
   bool m_requestedPauseAfterInstrumentation = false;
   int m_continueToLocationBreakpointId;
-  String16 m_continueToLocationTargetCallFrames;
+  String8 m_continueToLocationTargetCallFrames;
   std::unique_ptr<V8StackTraceImpl> m_continueToLocationStack;
 
   // We cache symbolized stack frames by (scriptId,lineNumber,columnNumber)

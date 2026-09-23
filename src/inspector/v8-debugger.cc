@@ -410,13 +410,13 @@ void V8Debugger::terminateExecutionCompletedCallbackIgnoringData(
 Response V8Debugger::continueToLocation(
     int targetContextGroupId, V8DebuggerScript* script,
     std::unique_ptr<protocol::Debugger::Location> location,
-    const String16& targetCallFrames) {
+    const String8& targetCallFrames) {
   DCHECK(isPaused());
   DCHECK(targetContextGroupId);
   m_targetContextGroupId = targetContextGroupId;
   v8::debug::Location v8Location(location->getLineNumber(),
                                  location->getColumnNumber(0));
-  if (script->setBreakpoint(String16(), &v8Location,
+  if (script->setBreakpoint(String8(), &v8Location,
                             &m_continueToLocationBreakpointId)) {
     m_continueToLocationTargetCallFrames = targetCallFrames;
     if (m_continueToLocationTargetCallFrames !=
@@ -464,7 +464,7 @@ void V8Debugger::clearContinueToLocation() {
   if (m_continueToLocationBreakpointId == kNoBreakpointId) return;
   v8::debug::RemoveBreakpoint(m_isolate, m_continueToLocationBreakpointId);
   m_continueToLocationBreakpointId = kNoBreakpointId;
-  m_continueToLocationTargetCallFrames = String16();
+  m_continueToLocationTargetCallFrames = String8();
   m_continueToLocationStack.reset();
 }
 
@@ -689,7 +689,7 @@ bool V8Debugger::IsFunctionBlackboxed(v8::Local<v8::debug::Script> script,
   if (!script->ContextId().To(&contextId)) return false;
   bool hasAgents = false;
   bool allBlackboxed = true;
-  String16 scriptId = String16::fromInteger(script->Id());
+  String8 scriptId = String8::fromInteger(script->Id());
   m_inspector->forEachSession(
       m_inspector->contextGroupId(contextId),
       [&hasAgents, &allBlackboxed, &scriptId, &start,
@@ -709,7 +709,7 @@ bool V8Debugger::ShouldBeSkipped(v8::Local<v8::debug::Script> script, int line,
 
   bool hasAgents = false;
   bool allShouldBeSkipped = true;
-  String16 scriptId = String16::fromInteger(script->Id());
+  String8 scriptId = String8::fromInteger(script->Id());
   m_inspector->forEachSession(
       m_inspector->contextGroupId(contextId),
       [&hasAgents, &allShouldBeSkipped, &scriptId, line,
@@ -731,7 +731,7 @@ void V8Debugger::BreakpointConditionEvaluated(
   v8::Local<v8::Message> message =
       v8::debug::CreateMessageFromException(isolate(), exception);
   v8::ScriptOrigin origin = message->GetScriptOrigin();
-  String16 url;
+  String8 url;
   if (origin.ResourceName()->IsString()) {
     url = toProtocolString(isolate(), origin.ResourceName().As<v8::String>());
   }
@@ -739,8 +739,9 @@ void V8Debugger::BreakpointConditionEvaluated(
   // need to get it from the v8::Message.
   StringView messageText;
   StringView detailedMessage;
+  ScopedStringView urlView(url);
   m_inspector->exceptionThrown(
-      context, messageText, exception, detailedMessage, toStringView(url),
+      context, messageText, exception, detailedMessage, urlView.view(),
       message->GetLineNumber(context).FromMaybe(0),
       message->GetStartColumn() + 1, createStackTrace(message->GetStackTrace()),
       origin.ScriptId());
@@ -753,15 +754,15 @@ void V8Debugger::AsyncEventOccurred(v8::debug::DebugAsyncActionType type,
   void* task = reinterpret_cast<void*>(id * 2 + 1);
   switch (type) {
     case v8::debug::kDebugPromiseThen:
-      asyncTaskScheduledForStack(toStringView("Promise.then"), task, false);
+      asyncTaskScheduledForStack("Promise.then", task, false);
       if (!isBlackboxed) asyncTaskCandidateForStepping(task);
       break;
     case v8::debug::kDebugPromiseCatch:
-      asyncTaskScheduledForStack(toStringView("Promise.catch"), task, false);
+      asyncTaskScheduledForStack("Promise.catch", task, false);
       if (!isBlackboxed) asyncTaskCandidateForStepping(task);
       break;
     case v8::debug::kDebugPromiseFinally:
-      asyncTaskScheduledForStack(toStringView("Promise.finally"), task, false);
+      asyncTaskScheduledForStack("Promise.finally", task, false);
       if (!isBlackboxed) asyncTaskCandidateForStepping(task);
       break;
     case v8::debug::kDebugWillHandle:
@@ -773,7 +774,7 @@ void V8Debugger::AsyncEventOccurred(v8::debug::DebugAsyncActionType type,
       asyncTaskFinishedForStepping(task);
       break;
     case v8::debug::kDebugAwait:
-      asyncTaskScheduledForStack(toStringView("await"), task, false, true);
+      asyncTaskScheduledForStack("await", task, false, true);
       break;
     case v8::debug::kDebugStackTraceCaptured:
       asyncStackTraceCaptured(id);
@@ -818,9 +819,9 @@ v8::MaybeLocal<v8::Value> V8Debugger::getTargetScopes(
     v8::Local<v8::Object> scope = v8::Object::New(m_isolate);
     if (!addInternalObject(context, scope, V8InternalValueType::kScope))
       return v8::MaybeLocal<v8::Value>();
-    String16 nameSuffix = toProtocolStringWithTypeCheck(
+    String8 nameSuffix = toProtocolStringWithTypeCheck(
         m_isolate, iterator->GetFunctionDebugName());
-    String16 description;
+    String8 description;
     if (nameSuffix.length()) nameSuffix = " (" + nameSuffix + ")";
     switch (iterator->GetType()) {
       case v8::debug::ScopeIterator::ScopeTypeGlobal:
@@ -1119,7 +1120,7 @@ V8StackTraceId V8Debugger::storeCurrentStackTrace(
   if (!contextGroupId) return V8StackTraceId();
 
   std::shared_ptr<AsyncStackTrace> asyncStack =
-      AsyncStackTrace::capture(this, toString16(description));
+      AsyncStackTrace::capture(this, toString8(description));
   if (!asyncStack) return V8StackTraceId();
 
   uintptr_t id = AsyncStackTrace::store(this, asyncStack);
@@ -1170,7 +1171,7 @@ void V8Debugger::externalAsyncTaskFinished(const V8StackTraceId& parent) {
   v8::debug::ClearBreakOnNextFunctionCall(m_isolate);
 }
 
-void V8Debugger::asyncTaskScheduled(const StringView& taskName, void* task,
+void V8Debugger::asyncTaskScheduled(const String8& taskName, void* task,
                                     bool recurring) {
   asyncTaskScheduledForStack(taskName, task, recurring);
   asyncTaskCandidateForStepping(task);
@@ -1203,13 +1204,12 @@ void AddTraceDataWithSample(v8::Isolate* isolate,
 }  // namespace
 #endif  // V8_USE_PERFETTO
 
-void V8Debugger::asyncTaskScheduledForStack(const StringView& taskName,
-                                            void* task, bool recurring,
-                                            bool skipTopFrame) {
+void V8Debugger::asyncTaskScheduledForStack(const String8& taskName, void* task,
+                                            bool recurring, bool skipTopFrame) {
 #ifdef V8_USE_PERFETTO
   TRACE_EVENT(TRACE_DISABLED_BY_DEFAULT("v8.inspector"),
               "v8::Debugger::AsyncTaskScheduled", "taskName",
-              TRACE_STR_COPY(toString16(taskName).utf8().c_str()),
+              TRACE_STR_COPY(taskName.utf8().c_str()),
               perfetto::Flow::ProcessScoped(reinterpret_cast<uintptr_t>(task)),
               "data", [isolate = m_isolate](perfetto::TracedValue context) {
                 AddTraceDataWithSample(isolate, std::move(context));
@@ -1218,7 +1218,7 @@ void V8Debugger::asyncTaskScheduledForStack(const StringView& taskName,
   if (!m_maxAsyncCallStackDepth) return;
   v8::HandleScope scope(m_isolate);
   std::shared_ptr<AsyncStackTrace> asyncStack =
-      AsyncStackTrace::capture(this, toString16(taskName), skipTopFrame);
+      AsyncStackTrace::capture(this, taskName, skipTopFrame);
   if (asyncStack) {
     m_asyncTaskStacks[task] = asyncStack;
     if (recurring) m_recurringTasks.insert(task);

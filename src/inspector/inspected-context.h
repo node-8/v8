@@ -13,7 +13,7 @@
 #include "include/v8-persistent-handle.h"
 #include "src/base/macros.h"
 #include "src/debug/debug-interface.h"
-#include "src/inspector/string-16.h"
+#include "src/inspector/string-8.h"
 #include "src/inspector/v8-debugger-id.h"
 
 namespace v8 {
@@ -48,10 +48,10 @@ class InspectedContext {
   v8::Local<v8::Context> context() const;
   int contextId() const { return m_contextId; }
   int contextGroupId() const { return m_contextGroupId; }
-  String16 origin() const { return m_origin; }
-  String16 humanReadableName() const { return m_humanReadableName; }
+  String8 origin() const { return m_origin; }
+  String8 humanReadableName() const { return m_humanReadableName; }
   internal::V8DebuggerId uniqueId() const { return m_uniqueId; }
-  String16 auxData() const { return m_auxData; }
+  String8 auxData() const { return m_auxData; }
 
   bool isReported(int sessionId) const;
   void setReported(int sessionId, bool reported);
@@ -78,9 +78,9 @@ class InspectedContext {
   v8::Global<v8::Context> m_context;
   int m_contextId;
   int m_contextGroupId;
-  const String16 m_origin;
-  const String16 m_humanReadableName;
-  const String16 m_auxData;
+  const String8 m_origin;
+  const String8 m_humanReadableName;
+  const String8 m_auxData;
   const internal::V8DebuggerId m_uniqueId;
   std::unordered_set<int> m_reportedSessionIds;
   std::unordered_map<int, std::unique_ptr<InjectedScript>> m_injectedScripts;

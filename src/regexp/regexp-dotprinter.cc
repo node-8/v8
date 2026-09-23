@@ -179,7 +179,9 @@ void DotPrinterImpl::VisitText(TextNode* that) {
 
 void DotPrinterImpl::VisitWtf8Scalar(Wtf8ScalarNode* that) {
   os_ << "  n" << that << " [label=\"WTF-8 scalar ";
-  if (that->is_positive_class()) {
+  if (that->is_any_scalar()) {
+    os_ << "any scalar";
+  } else if (that->is_positive_class()) {
     os_ << "positive class";
   } else {
     os_ << "except " << AsUC32(that->excluded_from()) << "-"
@@ -226,6 +228,9 @@ void DotPrinterImpl::VisitAssertion(AssertionNode* that) {
       break;
     case AssertionNode::AFTER_NEWLINE:
       os_ << "label=\"(?<=\\n)\", shape=septagon";
+      break;
+    case AssertionNode::NODE8_END_LITERAL:
+      os_ << "label=\"node-8 end literal\", shape=septagon";
       break;
   }
   os_ << "];\n";

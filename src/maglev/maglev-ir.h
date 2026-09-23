@@ -9824,6 +9824,9 @@ class CallBuiltin : public VarargsValueNodeT<0, CallBuiltin> {
   V(StringPrototypeTrim, NodeType::kString)                              \
   V(StringPrototypeTrimEnd, NodeType::kString)                           \
   V(StringPrototypeTrimStart, NodeType::kString)                         \
+  V(StringPrototypeTrimUtf8, NodeType::kString)                          \
+  V(StringPrototypeTrimEndUtf8, NodeType::kString)                       \
+  V(StringPrototypeTrimStartUtf8, NodeType::kString)                     \
   V(StringPrototypeValueOf, NodeType::kString)                           \
   V(StringPrototypeIterator, NodeType::kAnyHeapObject)                   \
   V(StringIteratorPrototypeNext, NodeType::kAnyHeapObject)               \

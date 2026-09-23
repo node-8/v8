@@ -60,12 +60,11 @@ class ContextNameResolver final : public v8::HeapProfiler::ContextNameResolver {
     InspectedContext* inspected_context = m_session->inspector()->getContext(
         m_session->contextGroupId(), InspectedContext::contextId(context));
     if (!inspected_context) return nullptr;
-    String16 name = inspected_context->origin();
+    String8 name = inspected_context->origin();
     size_t length = name.length();
     if (m_offset + length + 1 >= m_strings.size()) return nullptr;
     for (size_t i = 0; i < length; ++i) {
-      UChar ch = name[i];
-      m_strings[m_offset + i] = ch > 0xFF ? '?' : static_cast<char>(ch);
+      m_strings[m_offset + i] = static_cast<char>(name[i]);
     }
     m_strings[m_offset + length] = '\0';
     char* result = &*m_strings.begin() + m_offset;
@@ -86,7 +85,7 @@ class HeapSnapshotOutputStream final : public v8::OutputStream {
   void EndOfStream() override {}
   int GetChunkSize() override { return 1 * v8::internal::MB; }
   WriteResult WriteAsciiChunk(char* data, int size) override {
-    m_frontend->addHeapSnapshotChunk(String16(data, size));
+    m_frontend->addHeapSnapshotChunk(String8(data, size));
     m_frontend->flush();
     return kContinue;
   }
@@ -412,7 +411,7 @@ Response V8HeapProfilerAgentImpl::takeHeapSnapshotNow(
 }
 
 Response V8HeapProfilerAgentImpl::getObjectByHeapObjectId(
-    const String16& heapSnapshotObjectId, std::optional<String16> objectGroup,
+    const String8& heapSnapshotObjectId, std::optional<String8> objectGroup,
     std::unique_ptr<protocol::Runtime::RemoteObject>* result) {
   bool ok;
   int id = heapSnapshotObjectId.toInteger(&ok);
@@ -445,7 +444,7 @@ void V8HeapProfilerAgentImpl::takePendingHeapSnapshots() {
 }
 
 Response V8HeapProfilerAgentImpl::addInspectedHeapObject(
-    const String16& inspectedHeapObjectId) {
+    const String8& inspectedHeapObjectId) {
   bool ok;
   int id = inspectedHeapObjectId.toInteger(&ok);
   if (!ok) return Response::ServerError("Invalid heap snapshot object id");
@@ -463,7 +462,7 @@ Response V8HeapProfilerAgentImpl::addInspectedHeapObject(
 }
 
 Response V8HeapProfilerAgentImpl::getHeapObjectId(
-    const String16& objectId, String16* heapSnapshotObjectId) {
+    const String8& objectId, String8* heapSnapshotObjectId) {
   v8::HandleScope handles(m_isolate);
   v8::Local<v8::Value> value;
   v8::Local<v8::Context> context;
@@ -473,7 +472,7 @@ Response V8HeapProfilerAgentImpl::getHeapObjectId(
   if (value->IsUndefined()) return Response::InternalError();
 
   v8::SnapshotObjectId id = m_isolate->GetHeapProfiler()->GetObjectId(value);
-  *heapSnapshotObjectId = String16::fromInteger(static_cast<size_t>(id));
+  *heapSnapshotObjectId = String8::fromInteger(static_cast<size_t>(id));
   return Response::Success();
 }
 
@@ -597,7 +596,7 @@ buildSampingHeapProfileNode(v8::Isolate* isolate,
   std::unique_ptr<protocol::Runtime::CallFrame> callFrame =
       protocol::Runtime::CallFrame::create()
           .setFunctionName(toProtocolString(isolate, node->name))
-          .setScriptId(String16::fromInteger(node->script_id))
+          .setScriptId(String8::fromInteger(node->script_id))
           .setUrl(toProtocolString(isolate, node->script_name))
           .setLineNumber(node->line_number - 1)
           .setColumnNumber(node->column_number - 1)

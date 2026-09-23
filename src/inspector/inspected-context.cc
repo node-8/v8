@@ -72,9 +72,9 @@ InspectedContext::InspectedContext(V8InspectorImpl* inspector,
       m_context(inspector->isolate(), info.context),
       m_contextId(contextId),
       m_contextGroupId(info.contextGroupId),
-      m_origin(toString16(info.origin)),
-      m_humanReadableName(toString16(info.humanReadableName)),
-      m_auxData(toString16(info.auxData)),
+      m_origin(toString8(info.origin)),
+      m_humanReadableName(toString8(info.humanReadableName)),
+      m_auxData(toString8(info.auxData)),
       m_uniqueId(internal::V8DebuggerId::generate(inspector)) {
   v8::debug::SetContextId(info.context, contextId);
   m_weakCallbackData =

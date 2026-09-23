@@ -7,6 +7,7 @@ include_rules = [
   "+src/init/v8.h",
   "+src/libplatform/default-platform.h",
   "+src/utils",
+  "+src/strings/unicode-decoder.h",
 ]
 
 specific_include_rules = {

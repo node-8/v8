@@ -134,15 +134,100 @@ transitioning macro StringTrimBody<T: type>(
   return SubString(string, Unsigned(startIndex), Unsigned(endIndex + 1));
 }
 
+// Recognize only complete canonical encodings, without decoding the payload.
+macro Utf8TrimWhitespaceLength(
+    slice: ConstSlice<char8>, index: intptr, end: intptr): intptr {
+  const first = *slice.AtIndex(index);
+  if (first == 0xC2 && end - index >= 2 &&
+      *slice.AtIndex(index + 1) == 0xA0) {
+    return 2;
+  }
+  if (end - index < 3) return 0;
+  const second = *slice.AtIndex(index + 1);
+  const third = *slice.AtIndex(index + 2);
+  if (first == 0xE1 && second == 0x9A && third == 0x80) return 3;
+  if (first == 0xE2) {
+    if (second == 0x80 &&
+        ((third >= 0x80 && third <= 0x8A) || third == 0xA8 || third == 0xA9 ||
+         third == 0xAF)) {
+      return 3;
+    }
+    if (second == 0x81 && third == 0x9F) return 3;
+  }
+  if (first == 0xE3 && second == 0x80 && third == 0x80) return 3;
+  if (first == 0xEF && second == 0xBB && third == 0xBF) return 3;
+  return 0;
+}
+
+macro Utf8TrimWhitespaceLengthAtEnd(
+    slice: ConstSlice<char8>, start: intptr, end: intptr): intptr {
+  if (end - start >= 2 && *slice.AtIndex(end - 1) == 0xA0 &&
+      *slice.AtIndex(end - 2) == 0xC2) {
+    return 2;
+  }
+  if (end - start >= 3 && Utf8TrimWhitespaceLength(slice, end - 3, end) == 3) {
+    return 3;
+  }
+  return 0;
+}
+
+macro StringTrimUtf8Loop(
+    slice: ConstSlice<char8>, start: intptr, end: intptr,
+    fromStart: constexpr bool): intptr {
+  let index = fromStart ? start : end;
+  const limit = fromStart ? end : start;
+  while (index != limit) {
+    const byteIndex = fromStart ? index : index - 1;
+    const byte = Convert<uint32>(*slice.AtIndex(byteIndex));
+    try {
+      if (byte == 0x20) goto AsciiWhitespace;
+      // Keep ordinary ASCII on the same two checks as the stock loop.
+      if (byte - 0x0E < 0x72 || byte < 0x09) return index;
+      if (byte <= 0x0D) goto AsciiWhitespace;
+      goto NonAscii;
+    } label AsciiWhitespace {
+      index = fromStart ? index + 1 : index - 1;
+    } label NonAscii deferred {
+      const width = fromStart ?
+          Utf8TrimWhitespaceLength(slice, index, end) :
+          Utf8TrimWhitespaceLengthAtEnd(slice, start, index);
+      if (width == 0) return index;
+      index = fromStart ? index + width : index - width;
+    }
+  }
+  return index;
+}
+
+transitioning macro StringTrimUtf8Body(
+    implicit context: Context)(string: String, slice: ConstSlice<char8>,
+    variant: constexpr TrimMode): String {
+  let start: intptr = 0;
+  let end: intptr = string.length_intptr;
+  if (variant == TrimMode::kTrim || variant == TrimMode::kTrimStart) {
+    start = StringTrimUtf8Loop(slice, start, end, true);
+    if (start == end) return kEmptyString;
+  }
+  if (variant == TrimMode::kTrim || variant == TrimMode::kTrimEnd) {
+    end = StringTrimUtf8Loop(slice, start, end, false);
+    if (start == end) return kEmptyString;
+  }
+  return SubString(string, Unsigned(start), Unsigned(end));
+}
+
 transitioning macro StringTrim(
     implicit context: Context)(receiver: JSAny, _arguments: Arguments,
-    methodName: constexpr string, variant: constexpr TrimMode): String {
+    methodName: constexpr string, variant: constexpr TrimMode,
+    utf8: constexpr bool): String {
   const receiverString: String = ToThisString(receiver, methodName);
 
   try {
     StringToSlice(receiverString) otherwise OneByte, TwoByte;
   } label OneByte(slice: ConstSlice<char8>) {
-    return StringTrimBody(receiverString, slice, variant);
+    if constexpr (utf8) {
+      return StringTrimUtf8Body(receiverString, slice, variant);
+    } else {
+      return StringTrimBody(receiverString, slice, variant);
+    }
   } label TwoByte(slice: ConstSlice<char16>) {
     return StringTrimBody(receiverString, slice, variant);
   }
@@ -153,7 +238,7 @@ transitioning javascript builtin StringPrototypeTrim(
     js-implicit context: NativeContext, receiver: JSAny)(
     ...arguments): String {
   const methodName: constexpr string = 'String.prototype.trim';
-  return StringTrim(receiver, arguments, methodName, TrimMode::kTrim);
+  return StringTrim(receiver, arguments, methodName, TrimMode::kTrim, false);
 }
 
 // https://github.com/tc39/proposal-string-left-right-trim
@@ -161,7 +246,8 @@ transitioning javascript builtin StringPrototypeTrimStart(
     js-implicit context: NativeContext, receiver: JSAny)(
     ...arguments): String {
   const methodName: constexpr string = 'String.prototype.trimLeft';
-  return StringTrim(receiver, arguments, methodName, TrimMode::kTrimStart);
+  return StringTrim(
+      receiver, arguments, methodName, TrimMode::kTrimStart, false);
 }
 
 // https://github.com/tc39/proposal-string-left-right-trim
@@ -169,6 +255,29 @@ transitioning javascript builtin StringPrototypeTrimEnd(
     js-implicit context: NativeContext, receiver: JSAny)(
     ...arguments): String {
   const methodName: constexpr string = 'String.prototype.trimRight';
-  return StringTrim(receiver, arguments, methodName, TrimMode::kTrimEnd);
+  return StringTrim(receiver, arguments, methodName, TrimMode::kTrimEnd, false);
+}
+
+// Selected once during context initialization, not by a per-call flag check.
+transitioning javascript builtin StringPrototypeTrimUtf8(
+    js-implicit context: NativeContext, receiver: JSAny)(
+    ...arguments): String {
+  const methodName: constexpr string = 'String.prototype.trim';
+  return StringTrim(receiver, arguments, methodName, TrimMode::kTrim, true);
+}
+
+transitioning javascript builtin StringPrototypeTrimStartUtf8(
+    js-implicit context: NativeContext, receiver: JSAny)(
+    ...arguments): String {
+  const methodName: constexpr string = 'String.prototype.trimLeft';
+  return StringTrim(
+      receiver, arguments, methodName, TrimMode::kTrimStart, true);
+}
+
+transitioning javascript builtin StringPrototypeTrimEndUtf8(
+    js-implicit context: NativeContext, receiver: JSAny)(
+    ...arguments): String {
+  const methodName: constexpr string = 'String.prototype.trimRight';
+  return StringTrim(receiver, arguments, methodName, TrimMode::kTrimEnd, true);
 }
 }

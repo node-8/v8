@@ -20,14 +20,14 @@ class V8DebuggerId {
  public:
   V8DebuggerId() = default;
   explicit V8DebuggerId(std::pair<int64_t, int64_t>);
-  explicit V8DebuggerId(const String16&);
+  explicit V8DebuggerId(const String8&);
   V8DebuggerId(const V8DebuggerId&) V8_NOEXCEPT = default;
   V8DebuggerId& operator=(const V8DebuggerId&) V8_NOEXCEPT = default;
 
   static V8DebuggerId generate(V8InspectorImpl*);
 
   v8_inspector::V8DebuggerId toV8DebuggerId() const { return m_debugger_id; }
-  String16 toString() const;
+  String8 toString() const;
   bool isValid() const;
   std::pair<int64_t, int64_t> pair() const;
 

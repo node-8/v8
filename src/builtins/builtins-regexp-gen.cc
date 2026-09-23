@@ -1588,7 +1588,10 @@ TNode<Number> RegExpBuiltinsAssembler::AdvanceStringIndex(
     CSA_DCHECK(this, TaggedIsPositiveSmi(index_plus_one));
   }
 
-  Label if_isunicode(this), out(this);
+  Label if_node8(this), if_isunicode(this), out(this);
+  GotoIf(LoadRuntimeFlag(
+             ExternalReference::address_of_utf8_string_semantics_flag()),
+         &if_node8);
   GotoIfNot(is_unicode, &out);
 
   // Keep this unconditional (even on the fast path) just to be safe.
@@ -1618,6 +1621,86 @@ TNode<Number> RegExpBuiltinsAssembler::AdvanceStringIndex(
     TNode<Number> index_plus_two = NumberInc(index_plus_one);
     var_result = index_plus_two;
 
+    Goto(&out);
+  }
+
+  BIND(&if_node8);
+  {
+    // node-8 matching is Unicode-aware independently of the supplied flags.
+    // Preserve NumberInc's behavior for HeapNumbers and end positions.
+    GotoIfNot(TaggedIsPositiveSmi(index_plus_one), &out);
+    TNode<IntPtrT> string_length = LoadStringLengthAsWord(string);
+    TNode<IntPtrT> untagged_plus_one = SmiUntag(CAST(index_plus_one));
+    GotoIfNot(
+        UintPtrLessThan(Unsigned(untagged_plus_one), Unsigned(string_length)),
+        &out);
+    TNode<IntPtrT> untagged_index = SmiUntag(CAST(index));
+    TNode<IntPtrT> available = IntPtrSub(string_length, untagged_index);
+    CSA_DCHECK(this, IsOneByteStringInstanceType(LoadInstanceType(string)));
+
+    // Direct strings need no copy. For ropes and uncached external strings,
+    // copy only this local window; StringCharCodeAt would flatten a rope.
+    TVARIABLE(RawPtrT, var_bytes);
+    Label copy_window(this, Label::kDeferred), decode(this);
+    ToDirectStringAssembler to_direct(state(), string);
+    to_direct.TryToDirect(&copy_window);
+    TNode<RawPtrT> data = to_direct.PointerToData(&copy_window);
+    var_bytes = RawPtrAdd(data, IntPtrAdd(untagged_index, to_direct.offset()));
+    Goto(&decode);
+
+    BIND(&copy_window);
+    {
+      TNode<RawPtrT> window = StackSlotPtr(4, alignof(uint32_t));
+      TNode<IntPtrT> length = IntPtrMin(available, IntPtrConstant(4));
+      StringWriteToFlatOneByte(string, window,
+                               TruncateIntPtrToInt32(untagged_index),
+                               TruncateIntPtrToInt32(length));
+      var_bytes = window;
+      Goto(&decode);
+    }
+
+    BIND(&decode);
+    // No allocating operation may occur while the direct data pointer is live.
+    // Match Wtf8ByteCursor's internal policy, including malformed maximal
+    // subparts and complete WTF-8 surrogate sequences.
+    TNode<Uint32T> first = Load<Uint8T>(var_bytes.value());
+    GotoIf(Uint32LessThan(first, Uint32Constant(0x80)), &out);
+    GotoIf(Uint32LessThan(first, Uint32Constant(0xc2)), &out);
+    GotoIf(Uint32GreaterThan(first, Uint32Constant(0xf4)), &out);
+
+    TNode<Uint32T> second = Load<Uint8T>(var_bytes.value(), IntPtrConstant(1));
+    TNode<Uint32T> second_min = Select<Uint32T>(
+        Word32Equal(first, Uint32Constant(0xe0)),
+        [=, this] { return Uint32Constant(0xa0); },
+        [=, this] {
+          return Select<Uint32T>(
+              Word32Equal(first, Uint32Constant(0xf0)),
+              [=, this] { return Uint32Constant(0x90); },
+              [=, this] { return Uint32Constant(0x80); });
+        });
+    TNode<Uint32T> second_max = Select<Uint32T>(
+        Word32Equal(first, Uint32Constant(0xf4)),
+        [=, this] { return Uint32Constant(0x8f); },
+        [=, this] { return Uint32Constant(0xbf); });
+    GotoIf(Uint32LessThan(second, second_min), &out);
+    GotoIf(Uint32GreaterThan(second, second_max), &out);
+
+    var_result = SmiTag(IntPtrAdd(untagged_index, IntPtrConstant(2)));
+    GotoIf(Uint32LessThan(first, Uint32Constant(0xe0)), &out);
+    GotoIf(IntPtrLessThanOrEqual(available, IntPtrConstant(2)), &out);
+    TNode<Uint32T> third = Load<Uint8T>(var_bytes.value(), IntPtrConstant(2));
+    GotoIf(Word32NotEqual(Word32And(third, Uint32Constant(0xc0)),
+                          Uint32Constant(0x80)),
+           &out);
+
+    var_result = SmiTag(IntPtrAdd(untagged_index, IntPtrConstant(3)));
+    GotoIf(Uint32LessThan(first, Uint32Constant(0xf0)), &out);
+    GotoIf(IntPtrLessThanOrEqual(available, IntPtrConstant(3)), &out);
+    TNode<Uint32T> fourth = Load<Uint8T>(var_bytes.value(), IntPtrConstant(3));
+    GotoIf(Word32NotEqual(Word32And(fourth, Uint32Constant(0xc0)),
+                          Uint32Constant(0x80)),
+           &out);
+    var_result = SmiTag(IntPtrAdd(untagged_index, IntPtrConstant(4)));
     Goto(&out);
   }
 

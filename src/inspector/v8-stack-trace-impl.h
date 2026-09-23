@@ -5,6 +5,7 @@
 #ifndef V8_INSPECTOR_V8_STACK_TRACE_IMPL_H_
 #define V8_INSPECTOR_V8_STACK_TRACE_IMPL_H_
 
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -12,7 +13,7 @@
 #include "include/v8-local-handle.h"
 #include "src/base/macros.h"
 #include "src/inspector/protocol/Runtime.h"
-#include "src/inspector/string-16.h"
+#include "src/inspector/string-8.h"
 
 namespace v8 {
 class StackFrame;
@@ -27,13 +28,13 @@ struct V8StackTraceId;
 
 class StackFrame {
  public:
-  StackFrame(String16&& functionName, int scriptId, String16&& sourceURL,
+  StackFrame(String8&& functionName, int scriptId, String8&& sourceURL,
              int lineNumber, int columnNumber, bool hasSourceURLComment);
   ~StackFrame() = default;
 
-  const String16& functionName() const;
+  const String8& functionName() const;
   int scriptId() const;
-  const String16& sourceURL() const;
+  const String8& sourceURL() const;
   int lineNumber() const;    // 0-based.
   int columnNumber() const;  // 0-based.
   std::unique_ptr<protocol::Runtime::CallFrame> buildInspectorObject(
@@ -41,9 +42,9 @@ class StackFrame {
   bool isEqual(StackFrame* frame) const;
 
  private:
-  String16 m_functionName;
+  String8 m_functionName;
   int m_scriptId;
-  String16 m_sourceURL;
+  String8 m_sourceURL;
   int m_lineNumber;    // 0-based.
   int m_columnNumber;  // 0-based.
   bool m_hasSourceURLComment;
@@ -110,6 +111,10 @@ class V8StackTraceImpl : public V8StackTrace {
   int m_maxAsyncDepth;
   std::weak_ptr<AsyncStackTrace> m_asyncParent;
   V8StackTraceId m_externalParent;
+
+  // Lazily owned legacy API results. Views remain valid for this trace's life.
+  StringView apiStringView(const String8&) const;
+  mutable std::map<String8, std::unique_ptr<StringBuffer>> m_apiStrings;
 };
 
 class AsyncStackTrace {
@@ -117,7 +122,7 @@ class AsyncStackTrace {
   AsyncStackTrace(const AsyncStackTrace&) = delete;
   AsyncStackTrace& operator=(const AsyncStackTrace&) = delete;
   static std::shared_ptr<AsyncStackTrace> capture(V8Debugger*,
-                                                  const String16& description,
+                                                  const String8& description,
                                                   bool skipTopFrame = false);
   static uintptr_t store(V8Debugger* debugger,
                          std::shared_ptr<AsyncStackTrace> stack);
@@ -125,7 +130,7 @@ class AsyncStackTrace {
   std::unique_ptr<protocol::Runtime::StackTrace> buildInspectorObject(
       V8Debugger* debugger, int maxAsyncDepth) const;
 
-  const String16& description() const;
+  const String8& description() const;
   std::weak_ptr<AsyncStackTrace> parent() const;
   bool isEmpty() const;
   const V8StackTraceId& externalParent() const { return m_externalParent; }
@@ -135,13 +140,13 @@ class AsyncStackTrace {
   }
 
  private:
-  AsyncStackTrace(const String16& description,
+  AsyncStackTrace(const String8& description,
                   std::vector<std::shared_ptr<StackFrame>> frames,
                   std::shared_ptr<AsyncStackTrace> asyncParent,
                   const V8StackTraceId& externalParent);
 
   uintptr_t m_id;
-  String16 m_description;
+  String8 m_description;
 
   std::vector<std::shared_ptr<StackFrame>> m_frames;
   std::weak_ptr<AsyncStackTrace> m_asyncParent;

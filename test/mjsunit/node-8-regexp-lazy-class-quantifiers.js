@@ -43,8 +43,8 @@ check(continuationStart, eAcute + 'a', 1, raw(0xa9));
 assertEquals(2, continuationStart.lastIndex);
 
 const emptyMatches = Array.from(cjk.matchAll(/[^\n]*?/gu));
-assertEquals([0, 1, 2, 3], emptyMatches.map(match => match.index));
-assertEquals([[], [], [], []], emptyMatches.map(match => bytes(match[0])));
+assertEquals([0, 3], emptyMatches.map(match => match.index));
+assertEquals([[], []], emptyMatches.map(match => bytes(match[0])));
 
 function scalarWidth(input, position) {
   const first = input[position];

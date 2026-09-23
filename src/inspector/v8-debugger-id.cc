@@ -14,8 +14,8 @@ V8DebuggerId::V8DebuggerId(std::pair<int64_t, int64_t> pair)
     : m_first(pair.first), m_second(pair.second) {}
 
 std::unique_ptr<StringBuffer> V8DebuggerId::toString() const {
-  return StringBufferFrom(String16::fromInteger64(m_first) + "." +
-                          String16::fromInteger64(m_second));
+  return StringBufferFrom(String8::fromInteger64(m_first) + "." +
+                          String8::fromInteger64(m_second));
 }
 
 bool V8DebuggerId::isValid() const { return m_first || m_second; }
@@ -35,10 +35,10 @@ V8DebuggerId V8DebuggerId::generate(V8InspectorImpl* inspector) {
                                      inspector->generateUniqueId()));
 }
 
-V8DebuggerId::V8DebuggerId(const String16& debuggerId) {
-  const UChar dot = '.';
+V8DebuggerId::V8DebuggerId(const String8& debuggerId) {
+  const uint8_t dot = '.';
   size_t pos = debuggerId.find(dot);
-  if (pos == String16::kNotFound) return;
+  if (pos == String8::kNotFound) return;
   bool ok = false;
   int64_t first = debuggerId.substring(0, pos).toInteger64(&ok);
   if (!ok) return;
@@ -47,8 +47,8 @@ V8DebuggerId::V8DebuggerId(const String16& debuggerId) {
   m_debugger_id = v8_inspector::V8DebuggerId(std::make_pair(first, second));
 }
 
-String16 V8DebuggerId::toString() const {
-  return toString16(m_debugger_id.toString()->string());
+String8 V8DebuggerId::toString() const {
+  return toString8(m_debugger_id.toString()->string());
 }
 
 bool V8DebuggerId::isValid() const { return m_debugger_id.isValid(); }

@@ -8,6 +8,7 @@
 
 #include "include/v8-inspector.h"
 #include "include/v8-primitive.h"
+#include "src/strings/unicode-decoder.h"
 
 namespace v8 {
 namespace internal {
@@ -25,6 +26,14 @@ v8::Local<v8::String> ToV8String(v8::Isolate* isolate, const char* str) {
 
 v8::Local<v8::String> ToV8String(v8::Isolate* isolate,
                                  const std::vector<uint8_t>& bytes) {
+  // This overload transports opaque session-state bytes, not Latin-1 text.
+  if (v8::String::ValueView(isolate, v8::String::Empty(isolate))
+          .uses_utf8_semantics()) {
+    return v8::String::NewFromBytes(isolate, bytes.data(),
+                                    v8::NewStringType::kNormal,
+                                    static_cast<int>(bytes.size()))
+        .ToLocalChecked();
+  }
   return v8::String::NewFromOneByte(isolate, bytes.data(),
                                     v8::NewStringType::kNormal,
                                     static_cast<int>(bytes.size()))
@@ -63,6 +72,24 @@ v8::Local<v8::String> ToV8String(v8::Isolate* isolate,
 
 std::vector<uint16_t> ToVector(v8::Isolate* isolate,
                                v8::Local<v8::String> str) {
+  // This is a legacy UTF-16 API boundary, not a raw-byte widening operation.
+  v8::String::ValueView view(isolate, str);
+  if (view.uses_utf8_semantics()) {
+    Wtf8ByteCursor cursor({view.data8(), view.length()},
+                          Wtf8ByteCursor::Policy::kWebScalar);
+    std::vector<uint16_t> buffer;
+    buffer.reserve(view.length());
+    while (cursor.has_next()) {
+      uint32_t point = cursor.DecodeNext().code_point;
+      if (point <= 0xffff) {
+        buffer.push_back(static_cast<uint16_t>(point));
+      } else {
+        buffer.push_back(unibrow::Utf16::LeadSurrogate(point));
+        buffer.push_back(unibrow::Utf16::TrailSurrogate(point));
+      }
+    }
+    return buffer;
+  }
   uint32_t length = str->Length();
   std::vector<uint16_t> buffer(length);
   str->WriteV2(isolate, 0, length, buffer.data());

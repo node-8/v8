@@ -18,20 +18,21 @@ namespace {
 
 const char kGlobalDebuggerScriptHandleLabel[] = "DevTools debugger";
 
-String16 calculateHash(v8::Isolate* isolate, v8::Local<v8::String> source) {
+String8 calculateHash(v8::Isolate* isolate, v8::Local<v8::String> source) {
   uint32_t length = source->Length();
-  std::unique_ptr<UChar[]> buffer(new UChar[length]);
-  source->WriteV2(isolate, 0, length,
-                  reinterpret_cast<uint16_t*>(buffer.get()));
-
-  const uint8_t* data = nullptr;
-  size_t sizeInBytes = sizeof(UChar) * length;
-  data = reinterpret_cast<const uint8_t*>(buffer.get());
-
   uint8_t hash[kSizeOfSha256Digest];
-  v8::internal::SHA256_hash(data, sizeInBytes, hash);
+  if (usesByteStringSemantics(isolate)) {
+    v8::String::ValueView view(isolate, source);
+    v8::internal::SHA256_hash(view.data8(), view.length(), hash);
+  } else {
+    // Preserve the stock inspector's externally visible UTF-16 source hash.
+    std::vector<uint16_t> units(length);
+    source->WriteV2(isolate, 0, length, units.data());
+    v8::internal::SHA256_hash(reinterpret_cast<const uint8_t*>(units.data()),
+                              units.size() * sizeof(uint16_t), hash);
+  }
 
-  String16Builder formatted_hash;
+  String8Builder formatted_hash;
   for (size_t i = 0; i < kSizeOfSha256Digest; i++)
     formatted_hash.appendUnsignedAsHex(static_cast<uint8_t>(hash[i]));
 
@@ -44,7 +45,7 @@ V8DebuggerScript::V8DebuggerScript(v8::Isolate* isolate,
                                    v8::Local<v8::debug::Script> script,
                                    bool isLiveEdit, V8DebuggerAgentImpl* agent,
                                    V8InspectorClient* client)
-    : m_id(String16::fromInteger(script->Id())),
+    : m_id(String8::fromInteger(script->Id())),
       m_url(GetScriptURL(isolate, script, client)),
       m_isolate(isolate),
       m_embedderName(GetScriptName(isolate, script, client)),
@@ -53,20 +54,33 @@ V8DebuggerScript::V8DebuggerScript(v8::Isolate* isolate,
   Initialize(script);
 }
 
-String16 V8DebuggerScript::source(size_t pos, size_t len) const {
+String8 V8DebuggerScript::source(size_t pos, size_t len,
+                                 bool for_protocol) const {
   v8::HandleScope scope(m_isolate);
   v8::Local<v8::String> v8Source;
   if (!m_scriptSource.Get(m_isolate)->JavaScriptCode().ToLocal(&v8Source)) {
-    return String16();
+    return String8();
   }
-  if (pos >= static_cast<size_t>(v8Source->Length())) return String16();
+  if (pos >= static_cast<size_t>(v8Source->Length())) return String8();
   size_t substringLength =
       std::min(len, static_cast<size_t>(v8Source->Length()) - pos);
-  std::unique_ptr<UChar[]> buffer(new UChar[substringLength]);
-  v8Source->WriteV2(m_isolate, static_cast<uint32_t>(pos),
-                    static_cast<uint32_t>(substringLength),
-                    reinterpret_cast<uint16_t*>(buffer.get()));
-  return String16(buffer.get(), substringLength);
+  if (!for_protocol) {
+    v8::String::ValueView view(m_isolate, v8Source);
+    size_t end = pos + substringLength;
+    if (view.uses_utf8_semantics()) {
+      if (end < view.length()) {
+        while (end > pos && (view.data8()[end] & 0xc0) == 0x80) --end;
+      }
+      return String8::fromUTF8(
+          reinterpret_cast<const char*>(view.data8() + pos), end - pos);
+    }
+    if (!view.is_one_byte() && end < view.length() && end > pos &&
+        view.data16()[end - 1] >= 0xd800 && view.data16()[end - 1] <= 0xdbff &&
+        view.data16()[end] >= 0xdc00 && view.data16()[end] <= 0xdfff) {
+      --substringLength;
+    }
+  }
+  return toProtocolString(m_isolate, v8Source, pos, substringLength);
 }
 
 #if V8_ENABLE_WEBASSEMBLY
@@ -111,11 +125,11 @@ int V8DebuggerScript::length() const {
   return static_cast<int>(m_scriptSource.Get(m_isolate)->Length());
 }
 
-void V8DebuggerScript::setSourceMappingURL(const String16& sourceMappingURL) {
+void V8DebuggerScript::setSourceMappingURL(const String8& sourceMappingURL) {
   m_sourceMappingURL = sourceMappingURL;
 }
 
-void V8DebuggerScript::setSource(const String16& newSource, bool preview,
+void V8DebuggerScript::setSource(const String8& newSource, bool preview,
                                  bool allowTopFrameLiveEditing,
                                  v8::debug::LiveEditResult* result) {
   v8::EscapableHandleScope scope(m_isolate);
@@ -128,7 +142,7 @@ void V8DebuggerScript::setSource(const String16& newSource, bool preview,
   // NOP if preview or unchanged source (diffs.empty() in PatchScript)
   if (preview || result->script.IsEmpty()) return;
 
-  m_hash = String16();
+  m_hash = String8();
   Initialize(scope.Escape(result->script));
 }
 
@@ -186,7 +200,7 @@ v8::debug::Location V8DebuggerScript::location(int offset) const {
   return m_script.Get(m_isolate)->GetSourceLocation(offset);
 }
 
-bool V8DebuggerScript::setBreakpoint(const String16& condition,
+bool V8DebuggerScript::setBreakpoint(const String8& condition,
                                      v8::debug::Location* location,
                                      int* id) const {
   v8::HandleScope scope(m_isolate);
@@ -199,7 +213,7 @@ bool V8DebuggerScript::setInstrumentationBreakpoint(int* id) const {
   return script()->SetInstrumentationBreakpoint(id);
 }
 
-const String16& V8DebuggerScript::hash() const {
+const String8& V8DebuggerScript::hash() const {
   if (!m_hash.isEmpty()) return m_hash;
   v8::HandleScope scope(m_isolate);
   v8::Local<v8::String> v8Source;
@@ -211,7 +225,7 @@ const String16& V8DebuggerScript::hash() const {
   return m_hash;
 }
 
-String16 V8DebuggerScript::buildId() const {
+String8 V8DebuggerScript::buildId() const {
   if (!m_buildId.isEmpty()) return m_buildId;
   v8::Local<v8::debug::Script> script = this->script();
 #if V8_ENABLE_WEBASSEMBLY
@@ -220,7 +234,7 @@ String16 V8DebuggerScript::buildId() const {
           v8::debug::WasmScript::Cast(*script)->GetModuleBuildId();
       if (maybe_build_id.IsJust()) {
         v8::MemorySpan<const uint8_t> buildId = maybe_build_id.FromJust();
-        String16Builder buildIdFormatter;
+        String8Builder buildIdFormatter;
         for (size_t i = 0; i < buildId.size(); i++) {
           buildIdFormatter.appendUnsignedAsHex(
               static_cast<uint8_t>(buildId[i]));
@@ -238,14 +252,14 @@ String16 V8DebuggerScript::buildId() const {
     return m_buildId;
 }
 
-void V8DebuggerScript::setBuildId(const String16& buildId) {
+void V8DebuggerScript::setBuildId(const String8& buildId) {
   m_buildId = buildId;
 }
 
 // static
-String16 V8DebuggerScript::GetScriptURL(v8::Isolate* isolate,
-                                        v8::Local<v8::debug::Script> script,
-                                        V8InspectorClient* client) {
+String8 V8DebuggerScript::GetScriptURL(v8::Isolate* isolate,
+                                       v8::Local<v8::debug::Script> script,
+                                       V8InspectorClient* client) {
   v8::Local<v8::String> sourceURL;
   if (script->SourceURL().ToLocal(&sourceURL) && sourceURL->Length() > 0)
     return toProtocolString(isolate, sourceURL);
@@ -253,17 +267,18 @@ String16 V8DebuggerScript::GetScriptURL(v8::Isolate* isolate,
 }
 
 // static
-String16 V8DebuggerScript::GetScriptName(v8::Isolate* isolate,
-                                         v8::Local<v8::debug::Script> script,
-                                         V8InspectorClient* client) {
+String8 V8DebuggerScript::GetScriptName(v8::Isolate* isolate,
+                                        v8::Local<v8::debug::Script> script,
+                                        V8InspectorClient* client) {
   v8::Local<v8::String> v8Name;
   if (script->Name().ToLocal(&v8Name) && v8Name->Length() > 0) {
-    String16 name = toProtocolString(isolate, v8Name);
+    String8 name = toProtocolString(isolate, v8Name);
+    ScopedStringView nameView(name);
     std::unique_ptr<StringBuffer> url =
-        client->resourceNameToUrl(toStringView(name));
-    return url ? toString16(url->string()) : name;
+        client->resourceNameToUrl(nameView.view());
+    return url ? toString8(url->string()) : name;
   }
-  return String16();
+  return String8();
 }
 
 v8::Local<v8::debug::Script> V8DebuggerScript::script() const {
@@ -316,7 +331,7 @@ void V8DebuggerScript::WeakCallback() {
   m_agent->ScriptCollected(this);
 }
 
-void V8DebuggerScript::setSourceURL(const String16& sourceURL) {
+void V8DebuggerScript::setSourceURL(const String8& sourceURL) {
   if (sourceURL.length() > 0) {
     m_hasSourceURLComment = true;
     m_url = sourceURL;

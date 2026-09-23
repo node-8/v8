@@ -17,7 +17,7 @@
 
 namespace v8_inspector {
 
-V8Regex::V8Regex(V8InspectorImpl* inspector, const String16& pattern,
+V8Regex::V8Regex(V8InspectorImpl* inspector, const String8& pattern,
                  bool caseSensitive, bool multiline)
     : m_inspector(inspector) {
   v8::Isolate* isolate = m_inspector->isolate();
@@ -48,11 +48,13 @@ V8Regex::V8Regex(V8InspectorImpl* inspector, const String16& pattern,
     m_errorMessage = "Internal error";
 }
 
-int V8Regex::match(const String16& string, int startFrom,
+int V8Regex::match(const String8& string, int startFrom,
                    int* matchLength) const {
   if (matchLength) *matchLength = 0;
 
   if (m_regex.IsEmpty() || string.isEmpty()) return -1;
+  if (startFrom < 0 || static_cast<size_t>(startFrom) > string.length())
+    return -1;
 
   // v8 strings are limited to int.
   if (string.length() > INT_MAX) return -1;
@@ -76,8 +78,8 @@ int V8Regex::match(const String16& string, int startFrom,
   if (!regex->Get(context, toV8StringInternalized(isolate, "exec"))
            .ToLocal(&exec))
     return -1;
-  v8::Local<v8::Value> argv[] = {
-      toV8String(isolate, string.substring(startFrom))};
+  String8 suffix = string.substring(startFrom);
+  v8::Local<v8::Value> argv[] = {toV8String(isolate, suffix)};
   v8::Local<v8::Value> returnValue;
   if (!exec.As<v8::Function>()
            ->Call(context, regex, arraysize(argv), argv)
@@ -102,10 +104,13 @@ int V8Regex::match(const String16& string, int startFrom,
   if (matchLength) {
     v8::Local<v8::Value> match;
     if (!result->Get(context, 0).ToLocal(&match)) return -1;
-    *matchLength = match.As<v8::String>()->Length();
+    *matchLength = static_cast<int>(
+        toProtocolString(isolate, match.As<v8::String>()).length());
   }
 
-  return matchOffset.As<v8::Int32>()->Value() + startFrom;
+  return static_cast<int>(protocolByteOffset(
+             isolate, suffix, matchOffset.As<v8::Int32>()->Value())) +
+         startFrom;
 }
 
 }  // namespace v8_inspector

@@ -27,10 +27,11 @@ function assertMatchIndices(expected, regexp, value) {
 
 const mixedExact = '((' + classSource + '){2})';
 
-// The proved field branch must appear before unchanged alternatives.
+// The specialized first-branch path and generic later branches agree.
 assertMatchIndices(
     [[0, 10], [4, 9], [6, 9]], expression(true, mixedExact), subject);
-assertNull(expression(false, mixedExact).exec(subject));
+assertMatchIndices(
+    [[0, 10], [4, 9], [6, 9]], expression(false, mixedExact), subject);
 
 // Existing exact, finite, body-only unbounded, and pure-outer paths are reused.
 assertMatchIndices(
@@ -78,29 +79,39 @@ assertMatchIndices(
     [[1, 11], [5, 10], [7, 10]], afterMalformed, malformedPrefix);
 assertEquals(11, afterMalformed.lastIndex);
 
-// A branch must own all captures. Adjacent unsupported shapes retain their
-// preceding node-8 behavior.
-assertNull(
+// Generic composition handles captures across branches and nested choices.
+assertMatchIndices(
+    [[0, 10], [4, 9], undefined],
     new RegExp(
         '(?:key=(' + classSource + '{2})!|other=(' + classSource + '{2})!)',
-        'du')
-        .exec(subject));
-assertNull(
-    new RegExp('(?:zero|key=' + mixedExact + '!|none)', 'du').exec(subject));
-assertNull(new RegExp('(?:wrap(?:key=' + mixedExact + '!|none)|other)', 'du')
-               .exec('wrap' + subject));
-assertNull(
-    new RegExp('((?:key=' + mixedExact + '!|none))', 'du').exec(subject));
+        'du'), subject);
+assertMatchIndices(
+    [[0, 10], [4, 9], [6, 9]],
+    new RegExp('(?:zero|key=' + mixedExact + '!|none)', 'du'), subject);
+assertMatchIndices(
+    [[0, 14], [8, 13], [10, 13]],
+    new RegExp('(?:wrap(?:key=' + mixedExact + '!|none)|other)', 'du'),
+    'wrap' + subject);
+assertMatchIndices(
+    [[0, 10], [0, 10], [4, 9], [6, 9]],
+    new RegExp('((?:key=' + mixedExact + '!|none))', 'du'), subject);
 assertMatchIndices(
     [[0, 10], [4, 9], [6, 9]],
     new RegExp('(?:^key=' + mixedExact + '!|none)', 'du'), subject);
-assertNull(new RegExp('(?:key=' + mixedExact + '!$|none)', 'du').exec(subject));
-assertNull(
-    new RegExp('^(?:key=((' + classSource + '+))!|none)$', 'du').exec(subject));
-assertNull(
-    new RegExp('^(?:key=((' + classSource + ')+)!|none)$', 'du').exec(subject));
-assertNull(
-    expression(true, '((' + classSource + '){1})').exec('key=' + eAcute + '!'));
-assertNull(expression(true, mixedExact, 'duy').exec(subject));
+assertMatchIndices(
+    [[0, 10], [4, 9], [6, 9]],
+    new RegExp('(?:key=' + mixedExact + '!$|none)', 'du'), subject);
+assertMatchIndices(
+    [[0, 10], [4, 9], [4, 9]],
+    new RegExp('^(?:key=((' + classSource + '+))!|none)$', 'du'), subject);
+assertMatchIndices(
+    [[0, 10], [4, 9], [6, 9]],
+    new RegExp('^(?:key=((' + classSource + ')+)!|none)$', 'du'), subject);
+assertMatchIndices(
+    [[0, 7], [4, 6], [4, 6]], expression(true, '((' + classSource + '){1})'),
+    'key=' + eAcute + '!');
+assertMatchIndices(
+    [[0, 10], [4, 9], [6, 9]], expression(true, mixedExact, 'duy'), subject);
+// Ignore-case and modifier groups remain outside this generic lowering.
 assertNull(expression(true, mixedExact, 'dui').exec(subject));
 assertNull(new RegExp('(?i:key=' + mixedExact + '!|none)', 'du').exec(subject));

@@ -4,12 +4,16 @@
 
 #include "src/regexp/regexp-utils.h"
 
+#include <algorithm>
+
 #include "src/execution/isolate.h"
 #include "src/execution/protectors-inl.h"
+#include "src/flags/flags.h"
 #include "src/heap/factory.h"
 #include "src/objects/js-regexp-inl.h"
 #include "src/objects/objects-inl.h"
 #include "src/regexp/regexp.h"
+#include "src/strings/unicode-decoder.h"
 
 namespace v8 {
 namespace internal {
@@ -188,6 +192,21 @@ uint64_t RegExpUtils::AdvanceStringIndex(Tagged<String> string, uint64_t index,
                                          bool unicode) {
   DCHECK_LE(static_cast<double>(index), kMaxSafeInteger);
   const uint64_t string_length = static_cast<uint64_t>(string->length());
+  if (v8_flags.utf8_string_semantics) {
+    DCHECK(string->IsOneByteRepresentation());
+    if (index >= string_length ||
+        string->Get(static_cast<uint32_t>(index)) < 0x80) {
+      return index + 1;
+    }
+    // Copy only the local window, including from ropes, without flattening.
+    uint8_t bytes[4];
+    const int count =
+        static_cast<int>(std::min<uint64_t>(4, string_length - index));
+    String::WriteToFlat(string, bytes, static_cast<uint32_t>(index), count);
+    Wtf8ByteCursor cursor(base::Vector<const uint8_t>(bytes, count),
+                          Wtf8ByteCursor::Policy::kInternalWtf8);
+    return index + cursor.DecodeNext().byte_length;
+  }
   if (unicode && index < string_length) {
     const uint16_t first = string->Get(static_cast<uint32_t>(index));
     if (first >= 0xD800 && first <= 0xDBFF && index + 1 < string_length) {

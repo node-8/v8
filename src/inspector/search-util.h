@@ -14,13 +14,12 @@ namespace v8_inspector {
 
 class V8InspectorImpl;
 
-String16 findSourceURL(const String16& content, bool multiline);
-String16 findSourceMapURL(const String16& content, bool multiline);
-String16 findDebugId(const String16& content, bool multiline);
+String8 findSourceURL(const String8& content, bool multiline);
+String8 findSourceMapURL(const String8& content, bool multiline);
+String8 findDebugId(const String8& content, bool multiline);
 std::vector<std::unique_ptr<protocol::Debugger::SearchMatch>>
-searchInTextByLinesImpl(V8InspectorImpl*, const String16& text,
-                        const String16& query, bool caseSensitive,
-                        bool isRegex);
+searchInTextByLinesImpl(V8InspectorImpl*, const String8& text,
+                        const String8& query, bool caseSensitive, bool isRegex);
 
 }  // namespace v8_inspector
 

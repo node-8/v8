@@ -44,12 +44,12 @@ assertEquals(nestedOpen.indices[3], nestedOpen.indices.groups.part);
 
 const empty = Array.from(
     (eAcute + cjk).matchAll(/(([^^]){0,3}?)/dgu));
-assertEquals([[0, 0], [1, 1], [2, 2], [3, 3], [4, 4], [5, 5]],
+assertEquals([[0, 0], [2, 2], [5, 5]],
              empty.map(match => match.indices[0]));
 assertEquals(empty.map(match => match.indices[0]),
              empty.map(match => match.indices[1]));
-assertEquals([undefined, undefined, undefined, undefined, undefined,
-              undefined], empty.map(match => match.indices[2]));
+assertEquals([undefined, undefined, undefined],
+             empty.map(match => match.indices[2]));
 
 const replacementCalls = [];
 assertEquals('XXXXX', subject.replace(/(([^^]){1,2}?)/gu,

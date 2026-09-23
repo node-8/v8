@@ -56,7 +56,7 @@ std::vector<std::shared_ptr<StackFrame>> toFramesVector(
 std::unique_ptr<protocol::Runtime::StackTrace> buildInspectorObjectCommon(
     V8Debugger* debugger,
     const std::vector<std::shared_ptr<StackFrame>>& frames,
-    const String16& description,
+    const String8& description,
     const std::shared_ptr<AsyncStackTrace>& asyncParent,
     const V8StackTraceId& externalParent, int maxAsyncDepth) {
   if (asyncParent && frames.empty() &&
@@ -128,7 +128,7 @@ V8StackTraceId::V8StackTraceId(StringView json)
   auto dict = protocol::DictionaryValue::cast(
       protocol::Value::parseBinary(cbor.data(), cbor.size()));
   if (!dict) return;
-  String16 s;
+  String8 s;
   if (!dict->getString(kId, &s)) return;
   bool isOk = false;
   int64_t parsedId = s.toInteger64(&isOk);
@@ -146,7 +146,7 @@ bool V8StackTraceId::IsInvalid() const { return !id; }
 std::unique_ptr<StringBuffer> V8StackTraceId::ToString() {
   if (IsInvalid()) return nullptr;
   auto dict = protocol::DictionaryValue::create();
-  dict->setString(kId, String16::fromInteger64(id));
+  dict->setString(kId, String8::fromInteger64(id));
   dict->setString(kDebuggerId, internal::V8DebuggerId(debugger_id).toString());
   dict->setBoolean(kShouldPause, should_pause);
   std::vector<uint8_t> json;
@@ -155,8 +155,8 @@ std::unique_ptr<StringBuffer> V8StackTraceId::ToString() {
   return StringBufferFrom(std::move(json));
 }
 
-StackFrame::StackFrame(String16&& functionName, int scriptId,
-                       String16&& sourceURL, int lineNumber, int columnNumber,
+StackFrame::StackFrame(String8&& functionName, int scriptId,
+                       String8&& sourceURL, int lineNumber, int columnNumber,
                        bool hasSourceURLComment)
     : m_functionName(std::move(functionName)),
       m_scriptId(scriptId),
@@ -168,11 +168,11 @@ StackFrame::StackFrame(String16&& functionName, int scriptId,
   DCHECK_NE(v8::Message::kNoColumnInfo, m_columnNumber + 1);
 }
 
-const String16& StackFrame::functionName() const { return m_functionName; }
+const String8& StackFrame::functionName() const { return m_functionName; }
 
 int StackFrame::scriptId() const { return m_scriptId; }
 
-const String16& StackFrame::sourceURL() const { return m_sourceURL; }
+const String8& StackFrame::sourceURL() const { return m_sourceURL; }
 
 int StackFrame::lineNumber() const { return m_lineNumber; }
 
@@ -180,22 +180,23 @@ int StackFrame::columnNumber() const { return m_columnNumber; }
 
 std::unique_ptr<protocol::Runtime::CallFrame> StackFrame::buildInspectorObject(
     V8InspectorClient* client) const {
-  String16 frameUrl;
+  String8 frameUrl;
   const char* dataURIPrefix = "data:";
   if (m_sourceURL.substring(0, strlen(dataURIPrefix)) != dataURIPrefix) {
     frameUrl = m_sourceURL;
   }
 
   if (client && !m_hasSourceURLComment && frameUrl.length() > 0) {
+    ScopedStringView sourceURL(m_sourceURL);
     std::unique_ptr<StringBuffer> url =
-        client->resourceNameToUrl(toStringView(m_sourceURL));
+        client->resourceNameToUrl(sourceURL.view());
     if (url) {
-      frameUrl = toString16(url->string());
+      frameUrl = toString8(url->string());
     }
   }
   return protocol::Runtime::CallFrame::create()
       .setFunctionName(m_functionName)
-      .setScriptId(String16::fromInteger(m_scriptId))
+      .setScriptId(String8::fromInteger(m_scriptId))
       .setUrl(frameUrl)
       .setLineNumber(m_lineNumber)
       .setColumnNumber(m_columnNumber)
@@ -274,7 +275,7 @@ StringView V8StackTraceImpl::firstNonEmptySourceURL() const {
   StackFrameIterator current(this);
   while (!current.done()) {
     if (current.frame()->sourceURL().length()) {
-      return toStringView(current.frame()->sourceURL());
+      return apiStringView(current.frame()->sourceURL());
     }
     current.next();
   }
@@ -284,7 +285,7 @@ StringView V8StackTraceImpl::firstNonEmptySourceURL() const {
 bool V8StackTraceImpl::isEmpty() const { return m_frames.empty(); }
 
 StringView V8StackTraceImpl::topSourceURL() const {
-  return toStringView(m_frames[0]->sourceURL());
+  return apiStringView(m_frames[0]->sourceURL());
 }
 
 int V8StackTraceImpl::topLineNumber() const {
@@ -298,7 +299,13 @@ int V8StackTraceImpl::topColumnNumber() const {
 int V8StackTraceImpl::topScriptId() const { return m_frames[0]->scriptId(); }
 
 StringView V8StackTraceImpl::topFunctionName() const {
-  return toStringView(m_frames[0]->functionName());
+  return apiStringView(m_frames[0]->functionName());
+}
+
+StringView V8StackTraceImpl::apiStringView(const String8& string) const {
+  auto [entry, inserted] = m_apiStrings.try_emplace(string);
+  if (inserted) entry->second = StringBufferFrom(string);
+  return entry->second->string();
 }
 
 std::vector<V8StackFrame> V8StackTraceImpl::frames() const {
@@ -308,9 +315,9 @@ std::vector<V8StackFrame> V8StackTraceImpl::frames() const {
   for (const auto& frame : m_frames) {
     if (frame) {
       ret.emplace_back(V8StackFrame{
-          toStringView(frame->sourceURL()), toStringView(frame->functionName()),
-          frame->lineNumber() + 1, frame->columnNumber() + 1,
-          frame->scriptId()});
+          apiStringView(frame->sourceURL()),
+          apiStringView(frame->functionName()), frame->lineNumber() + 1,
+          frame->columnNumber() + 1, frame->scriptId()});
     }
   }
 
@@ -325,7 +332,7 @@ V8StackTraceImpl::buildInspectorObjectImpl(V8Debugger* debugger) const {
 std::unique_ptr<protocol::Runtime::StackTrace>
 V8StackTraceImpl::buildInspectorObjectImpl(V8Debugger* debugger,
                                            int maxAsyncDepth) const {
-  return buildInspectorObjectCommon(debugger, m_frames, String16(),
+  return buildInspectorObjectCommon(debugger, m_frames, String8(),
                                     m_asyncParent.lock(), m_externalParent,
                                     maxAsyncDepth);
 }
@@ -337,7 +344,7 @@ V8StackTraceImpl::buildInspectorObject(int maxAsyncDepth) const {
 }
 
 std::unique_ptr<StringBuffer> V8StackTraceImpl::toString() const {
-  String16Builder stackTrace;
+  String8Builder stackTrace;
   for (size_t i = 0; i < m_frames.size(); ++i) {
     const StackFrame& frame = *m_frames[i];
     stackTrace.append("\n    at " + (frame.functionName().length()
@@ -346,9 +353,9 @@ std::unique_ptr<StringBuffer> V8StackTraceImpl::toString() const {
     stackTrace.append(" (");
     stackTrace.append(frame.sourceURL());
     stackTrace.append(':');
-    stackTrace.append(String16::fromInteger(frame.lineNumber() + 1));
+    stackTrace.append(String8::fromInteger(frame.lineNumber() + 1));
     stackTrace.append(':');
-    stackTrace.append(String16::fromInteger(frame.columnNumber() + 1));
+    stackTrace.append(String8::fromInteger(frame.columnNumber() + 1));
     stackTrace.append(')');
   }
   return StringBufferFrom(stackTrace.toString());
@@ -398,7 +405,7 @@ StackFrame* V8StackTraceImpl::StackFrameIterator::frame() {
 
 // static
 std::shared_ptr<AsyncStackTrace> AsyncStackTrace::capture(
-    V8Debugger* debugger, const String16& description, bool skipTopFrame) {
+    V8Debugger* debugger, const String8& description, bool skipTopFrame) {
   DCHECK(debugger);
 
   int maxStackSize = debugger->maxCallStackSizeToCapture();
@@ -438,8 +445,7 @@ std::shared_ptr<AsyncStackTrace> AsyncStackTrace::capture(
 }
 
 AsyncStackTrace::AsyncStackTrace(
-    const String16& description,
-    std::vector<std::shared_ptr<StackFrame>> frames,
+    const String8& description, std::vector<std::shared_ptr<StackFrame>> frames,
     std::shared_ptr<AsyncStackTrace> asyncParent,
     const V8StackTraceId& externalParent)
     : m_id(0),
@@ -463,7 +469,7 @@ uintptr_t AsyncStackTrace::store(V8Debugger* debugger,
   return stack->m_id;
 }
 
-const String16& AsyncStackTrace::description() const { return m_description; }
+const String8& AsyncStackTrace::description() const { return m_description; }
 
 std::weak_ptr<AsyncStackTrace> AsyncStackTrace::parent() const {
   return m_asyncParent;

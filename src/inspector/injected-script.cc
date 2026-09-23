@@ -59,7 +59,7 @@ namespace v8_inspector {
 
 namespace {
 const char kGlobalHandleLabel[] = "DevTools console";
-bool isResolvableNumberLike(String16 query) {
+bool isResolvableNumberLike(String8 query) {
   return query == "Infinity" || query == "-Infinity" || query == "NaN";
 }
 }  // namespace
@@ -97,7 +97,7 @@ class InjectedScript::ProtocolPromiseHandler {
  public:
   static void add(V8InspectorSessionImpl* session,
                   v8::Local<v8::Context> context, v8::Local<v8::Value> value,
-                  int executionContextId, const String16& objectGroup,
+                  int executionContextId, const String8& objectGroup,
                   std::unique_ptr<WrapOptions> wrapOptions, bool replMode,
                   bool throwOnSideEffect,
                   std::weak_ptr<EvaluateCallback> callback) {
@@ -206,7 +206,7 @@ class InjectedScript::ProtocolPromiseHandler {
 
   ProtocolPromiseHandler(PromiseHandlerTracker::Id id,
                          V8InspectorSessionImpl* session,
-                         int executionContextId, const String16& objectGroup,
+                         int executionContextId, const String8& objectGroup,
                          std::unique_ptr<WrapOptions> wrapOptions,
                          bool replMode, bool throwOnSideEffect,
                          std::weak_ptr<EvaluateCallback> callback,
@@ -333,7 +333,7 @@ class InjectedScript::ProtocolPromiseHandler {
       return;
     }
 
-    String16 messageString;
+    String8 messageString;
     std::unique_ptr<V8StackTraceImpl> stack;
     if (result->IsNativeError()) {
       messageString =
@@ -356,7 +356,7 @@ class InjectedScript::ProtocolPromiseHandler {
     // would be confusing for the user. The stringified error is part of the
     // exception and does not need to be added in REPL mode, otherwise it would
     // be printed twice.
-    String16 exceptionDetailsText =
+    String8 exceptionDetailsText =
         m_replMode ? "Uncaught" : "Uncaught (in promise)" + messageString;
     std::unique_ptr<protocol::Runtime::ExceptionDetails> exceptionDetails =
         protocol::Runtime::ExceptionDetails::create()
@@ -378,8 +378,7 @@ class InjectedScript::ProtocolPromiseHandler {
       exceptionDetails->setStackTrace(
           stack->buildInspectorObjectImpl(m_inspector->debugger()));
     if (stack && !stack->isEmpty())
-      exceptionDetails->setScriptId(
-          String16::fromInteger(stack->topScriptId()));
+      exceptionDetails->setScriptId(String8::fromInteger(stack->topScriptId()));
     EvaluateCallback::sendSuccess(m_callback, scope.injectedScript(),
                                   std::move(wrappedValue),
                                   std::move(exceptionDetails));
@@ -389,7 +388,7 @@ class InjectedScript::ProtocolPromiseHandler {
   int m_sessionId;
   int m_contextGroupId;
   int m_executionContextId;
-  String16 m_objectGroup;
+  String8 m_objectGroup;
   std::unique_ptr<WrapOptions> m_wrapOptions;
   bool m_replMode;
   bool m_throwOnSideEffect;
@@ -418,7 +417,7 @@ class PropertyAccumulator : public ValueMirror::PropertyAccumulator {
 }  // anonymous namespace
 
 Response InjectedScript::getProperties(
-    v8::Local<v8::Object> object, const String16& groupName, bool ownProperties,
+    v8::Local<v8::Object> object, const String8& groupName, bool ownProperties,
     bool accessorPropertiesOnly, bool nonIndexedPropertiesOnly,
     const WrapOptions& wrapOptions,
     std::unique_ptr<Array<PropertyDescriptor>>* properties,
@@ -501,7 +500,7 @@ Response InjectedScript::getProperties(
 }
 
 Response InjectedScript::getInternalAndPrivateProperties(
-    v8::Local<v8::Value> value, const String16& groupName,
+    v8::Local<v8::Value> value, const String8& groupName,
     bool accessorPropertiesOnly,
     std::unique_ptr<protocol::Array<InternalPropertyDescriptor>>*
         internalProperties,
@@ -593,14 +592,14 @@ Response InjectedScript::getInternalAndPrivateProperties(
   return Response::Success();
 }
 
-void InjectedScript::releaseObject(const String16& objectId) {
+void InjectedScript::releaseObject(const String8& objectId) {
   std::unique_ptr<RemoteObjectId> remoteId;
   Response response = RemoteObjectId::parse(objectId, &remoteId);
   if (response.IsSuccess()) unbindObject(remoteId->id());
 }
 
 Response InjectedScript::wrapObject(
-    v8::Local<v8::Value> value, const String16& groupName,
+    v8::Local<v8::Value> value, const String8& groupName,
     const WrapOptions& wrapOptions,
     std::unique_ptr<protocol::Runtime::RemoteObject>* result) {
   return wrapObject(value, groupName, wrapOptions, v8::MaybeLocal<v8::Value>(),
@@ -608,7 +607,7 @@ Response InjectedScript::wrapObject(
 }
 
 Response InjectedScript::wrapObject(
-    v8::Local<v8::Value> value, const String16& groupName,
+    v8::Local<v8::Value> value, const String8& groupName,
     const WrapOptions& wrapOptions,
     v8::MaybeLocal<v8::Value> customPreviewConfig, int maxCustomPreviewDepth,
     std::unique_ptr<protocol::Runtime::RemoteObject>* result) {
@@ -621,7 +620,7 @@ Response InjectedScript::wrapObject(
 }
 
 Response InjectedScript::wrapObjectMirror(
-    const ValueMirror& mirror, const String16& groupName,
+    const ValueMirror& mirror, const String8& groupName,
     const WrapOptions& wrapOptions,
     v8::MaybeLocal<v8::Value> customPreviewConfig, int maxCustomPreviewDepth,
     std::unique_ptr<protocol::Runtime::RemoteObject>* result) {
@@ -653,7 +652,7 @@ Response InjectedScript::wrapObjectMirror(
         duplicateTracker, &deepSerializedValueDict);
     if (!response.IsSuccess()) return response;
 
-    String16 type;
+    String8 type;
     deepSerializedValueDict->getString("type", &type);
 
     std::unique_ptr<protocol::Runtime::DeepSerializedValue>
@@ -703,14 +702,14 @@ std::unique_ptr<protocol::Runtime::RemoteObject> InjectedScript::wrapTable(
                              &limit, &limit, &preview);
   if (!preview) return nullptr;
 
-  std::vector<String16> selectedColumns;
-  std::unordered_set<String16> columnSet;
+  std::vector<String8> selectedColumns;
+  std::unordered_set<String8> columnSet;
   v8::Local<v8::Array> v8Columns;
   if (maybeColumns.ToLocal(&v8Columns)) {
     for (uint32_t i = 0; i < v8Columns->Length(); ++i) {
       v8::Local<v8::Value> column;
       if (v8Columns->Get(context, i).ToLocal(&column) && column->IsString()) {
-        String16 name = toProtocolString(isolate, column.As<v8::String>());
+        String8 name = toProtocolString(isolate, column.As<v8::String>());
         if (columnSet.find(name) == columnSet.end()) {
           columnSet.insert(name);
           selectedColumns.push_back(name);
@@ -725,14 +724,14 @@ std::unique_ptr<protocol::Runtime::RemoteObject> InjectedScript::wrapTable(
       if (!columnPreview) continue;
       // Use raw pointer here since the lifetime of each PropertyPreview is
       // ensured by columnPreview. This saves an additional clone.
-      std::unordered_map<String16, PropertyPreview*> columnMap;
+      std::unordered_map<String8, PropertyPreview*> columnMap;
       for (const std::unique_ptr<PropertyPreview>& property :
            *columnPreview->getProperties()) {
         if (columnSet.find(property->getName()) == columnSet.end()) continue;
         columnMap[property->getName()] = property.get();
       }
       auto filtered = std::make_unique<Array<PropertyPreview>>();
-      for (const String16& column : selectedColumns) {
+      for (const String8& column : selectedColumns) {
         if (columnMap.find(column) == columnMap.end()) continue;
         filtered->push_back(columnMap[column]->Clone());
       }
@@ -745,7 +744,7 @@ std::unique_ptr<protocol::Runtime::RemoteObject> InjectedScript::wrapTable(
 
 void InjectedScript::addPromiseCallback(
     V8InspectorSessionImpl* session, v8::MaybeLocal<v8::Value> value,
-    const String16& objectGroup, std::unique_ptr<WrapOptions> wrapOptions,
+    const String8& objectGroup, std::unique_ptr<WrapOptions> wrapOptions,
     bool replMode, bool throwOnSideEffect,
     std::shared_ptr<EvaluateCallback> callback) {
   m_evaluateCallbacks.insert(callback);
@@ -798,13 +797,13 @@ Response InjectedScript::findObject(const RemoteObjectId& objectId,
   return Response::Success();
 }
 
-String16 InjectedScript::objectGroupName(const RemoteObjectId& objectId) const {
-  if (objectId.id() <= 0) return String16();
+String8 InjectedScript::objectGroupName(const RemoteObjectId& objectId) const {
+  if (objectId.id() <= 0) return String8();
   auto it = m_idToObjectGroupName.find(objectId.id());
-  return it != m_idToObjectGroupName.end() ? it->second : String16();
+  return it != m_idToObjectGroupName.end() ? it->second : String8();
 }
 
-void InjectedScript::releaseObjectGroup(const String16& objectGroup) {
+void InjectedScript::releaseObjectGroup(const String8& objectGroup) {
   if (objectGroup == "console") m_lastEvaluationResult.Reset();
   if (objectGroup.isEmpty()) return;
   auto it = m_nameToObjectGroup.find(objectGroup);
@@ -845,18 +844,17 @@ Response InjectedScript::resolveCallArgument(
     return findObject(*remoteObjectId, result);
   }
   if (callArgument->hasValue() || callArgument->hasUnserializableValue()) {
-    String16 value;
+    String8 value;
     if (callArgument->hasValue()) {
       std::vector<uint8_t> json;
       v8_crdtp::json::ConvertCBORToJSON(
           v8_crdtp::SpanFrom(callArgument->getValue(nullptr)->Serialize()),
           &json);
-      value =
-          "(" +
-          String16(reinterpret_cast<const char*>(json.data()), json.size()) +
-          ")";
+      value = "(" +
+              String8(reinterpret_cast<const char*>(json.data()), json.size()) +
+              ")";
     } else {
-      String16 unserializableValue = callArgument->getUnserializableValue("");
+      String8 unserializableValue = callArgument->getUnserializableValue("");
       // Protect against potential identifier resolution for NaN and Infinity.
       if (isResolvableNumberLike(unserializableValue))
         value = "Number(\"" + unserializableValue + "\")";
@@ -879,7 +877,7 @@ Response InjectedScript::resolveCallArgument(
 Response InjectedScript::addExceptionToDetails(
     v8::Local<v8::Value> exception,
     protocol::Runtime::ExceptionDetails* exceptionDetails,
-    const String16& objectGroup) {
+    const String8& objectGroup) {
   if (exception.IsEmpty()) return Response::Success();
   std::unique_ptr<protocol::Runtime::RemoteObject> wrapped;
   Response response =
@@ -893,7 +891,7 @@ Response InjectedScript::addExceptionToDetails(
 }
 
 Response InjectedScript::createExceptionDetails(
-    const v8::TryCatch& tryCatch, const String16& objectGroup,
+    const v8::TryCatch& tryCatch, const String8& objectGroup,
     std::unique_ptr<protocol::Runtime::ExceptionDetails>* result) {
   if (!tryCatch.HasCaught()) return Response::InternalError();
   v8::Local<v8::Message> message = tryCatch.Message();
@@ -903,16 +901,16 @@ Response InjectedScript::createExceptionDetails(
 
 Response InjectedScript::createExceptionDetails(
     v8::Local<v8::Message> message, v8::Local<v8::Value> exception,
-    const String16& objectGroup,
+    const String8& objectGroup,
     std::unique_ptr<protocol::Runtime::ExceptionDetails>* result) {
-  String16 messageText =
+  String8 messageText =
       message.IsEmpty()
-          ? String16()
+          ? String8()
           : toProtocolString(m_context->isolate(), message->Get());
   std::unique_ptr<protocol::Runtime::ExceptionDetails> exceptionDetails =
       protocol::Runtime::ExceptionDetails::create()
           .setExceptionId(m_context->inspector()->nextExceptionId())
-          .setText(exception.IsEmpty() ? messageText : String16("Uncaught"))
+          .setText(exception.IsEmpty() ? messageText : String8("Uncaught"))
           .setLineNumber(
               message.IsEmpty()
                   ? 0
@@ -925,7 +923,7 @@ Response InjectedScript::createExceptionDetails(
           .build();
   if (!message.IsEmpty()) {
     exceptionDetails->setScriptId(
-        String16::fromInteger(message->GetScriptOrigin().ScriptId()));
+        String8::fromInteger(message->GetScriptOrigin().ScriptId()));
     v8::Local<v8::StackTrace> stackTrace = message->GetStackTrace();
     if (!stackTrace.IsEmpty() && stackTrace->GetFrameCount() > 0) {
       std::unique_ptr<V8StackTraceImpl> v8StackTrace =
@@ -945,7 +943,7 @@ Response InjectedScript::createExceptionDetails(
 
 Response InjectedScript::wrapEvaluateResult(
     v8::MaybeLocal<v8::Value> maybeResultValue, const v8::TryCatch& tryCatch,
-    const String16& objectGroup, const WrapOptions& wrapOptions,
+    const String8& objectGroup, const WrapOptions& wrapOptions,
     bool throwOnSideEffect,
     std::unique_ptr<protocol::Runtime::RemoteObject>* result,
     std::unique_ptr<protocol::Runtime::ExceptionDetails>* exceptionDetails) {
@@ -1104,7 +1102,7 @@ Response InjectedScript::ContextScope::findInjectedScript(
 }
 
 InjectedScript::ObjectScope::ObjectScope(V8InspectorSessionImpl* session,
-                                         const String16& remoteObjectId)
+                                         const String8& remoteObjectId)
     : InjectedScript::Scope(session), m_remoteObjectId(remoteObjectId) {}
 
 InjectedScript::ObjectScope::~ObjectScope() = default;
@@ -1125,7 +1123,7 @@ Response InjectedScript::ObjectScope::findInjectedScript(
 }
 
 InjectedScript::CallFrameScope::CallFrameScope(V8InspectorSessionImpl* session,
-                                               const String16& remoteObjectId)
+                                               const String8& remoteObjectId)
     : InjectedScript::Scope(session), m_remoteCallFrameId(remoteObjectId) {}
 
 InjectedScript::CallFrameScope::~CallFrameScope() = default;
@@ -1139,8 +1137,8 @@ Response InjectedScript::CallFrameScope::findInjectedScript(
   return session->findInjectedScript(remoteId.get(), m_injectedScript);
 }
 
-String16 InjectedScript::bindObject(v8::Local<v8::Value> value,
-                                    const String16& groupName) {
+String8 InjectedScript::bindObject(v8::Local<v8::Value> value,
+                                   const String8& groupName) {
   if (m_lastBoundObjectId <= 0) m_lastBoundObjectId = 1;
   int id = m_lastBoundObjectId++;
   m_idToWrappedObject[id].Reset(m_context->isolate(), value);
@@ -1156,7 +1154,7 @@ String16 InjectedScript::bindObject(v8::Local<v8::Value> value,
 // static
 Response InjectedScript::bindRemoteObjectIfNeeded(
     int sessionId, v8::Local<v8::Context> context, v8::Local<v8::Value> value,
-    const String16& groupName, protocol::Runtime::RemoteObject* remoteObject) {
+    const String8& groupName, protocol::Runtime::RemoteObject* remoteObject) {
   if (!remoteObject) return Response::Success();
   if (remoteObject->hasValue()) return Response::Success();
   if (remoteObject->hasUnserializableValue()) return Response::Success();

@@ -53,17 +53,17 @@ class V8ConsoleMessage {
       v8::Local<v8::Context> v8Context, int contextId, int groupId,
       V8InspectorImpl* inspector, double timestamp, ConsoleAPIType,
       v8::MemorySpan<const v8::Local<v8::Value>> arguments,
-      const String16& consoleContext, std::unique_ptr<V8StackTraceImpl>);
+      const String8& consoleContext, std::unique_ptr<V8StackTraceImpl>);
 
   static std::unique_ptr<V8ConsoleMessage> createForException(
-      double timestamp, const String16& detailedMessage, const String16& url,
+      double timestamp, const String8& detailedMessage, const String8& url,
       unsigned lineNumber, unsigned columnNumber,
       std::unique_ptr<V8StackTraceImpl>, int scriptId, v8::Isolate*,
-      const String16& message, int contextId, v8::Local<v8::Value> exception,
+      const String8& message, int contextId, v8::Local<v8::Value> exception,
       unsigned exceptionId);
 
   static std::unique_ptr<V8ConsoleMessage> createForRevokedException(
-      double timestamp, const String16& message, unsigned revokedExceptionId);
+      double timestamp, const String8& message, unsigned revokedExceptionId);
 
   V8MessageOrigin origin() const;
   void reportToFrontend(protocol::Console::Frontend*) const;
@@ -73,18 +73,18 @@ class V8ConsoleMessage {
   void contextDestroyed(int contextId);
 
   int estimatedSize() const {
-    return m_v8Size + static_cast<int>(m_message.length() * sizeof(UChar));
+    return m_v8Size + static_cast<int>(m_message.length());
   }
 
  private:
-  V8ConsoleMessage(V8MessageOrigin, double timestamp, const String16& message);
+  V8ConsoleMessage(V8MessageOrigin, double timestamp, const String8& message);
 
   using Arguments = std::vector<std::shared_ptr<v8::Global<v8::Value>>>;
   std::unique_ptr<protocol::Array<protocol::Runtime::RemoteObject>>
   wrapArguments(V8InspectorSessionImpl*, bool generatePreview) const;
   std::unique_ptr<protocol::Runtime::RemoteObject> wrapException(
       V8InspectorSessionImpl*, bool generatePreview) const;
-  void setLocation(const String16& url, unsigned lineNumber,
+  void setLocation(const String8& url, unsigned lineNumber,
                    unsigned columnNumber, std::unique_ptr<V8StackTraceImpl>,
                    int scriptId);
   std::unique_ptr<protocol::DictionaryValue> getAssociatedExceptionData(
@@ -92,8 +92,8 @@ class V8ConsoleMessage {
 
   V8MessageOrigin m_origin;
   double m_timestamp;
-  String16 m_message;
-  String16 m_url;
+  String8 m_message;
+  String8 m_url;
   unsigned m_lineNumber;
   unsigned m_columnNumber;
   // V8ConsoleMessage needs to be copyable to prevent a UAF. See
@@ -106,8 +106,8 @@ class V8ConsoleMessage {
   unsigned m_revokedExceptionId;
   int m_v8Size = 0;
   Arguments m_arguments;
-  String16 m_detailedMessage;
-  String16 m_consoleContext;
+  String8 m_detailedMessage;
+  String8 m_consoleContext;
 };
 
 class V8ConsoleMessageStorage {
@@ -124,16 +124,16 @@ class V8ConsoleMessageStorage {
   void contextDestroyed(int contextId);
   void clear();
 
-  bool shouldReportDeprecationMessage(int contextId, const String16& method);
+  bool shouldReportDeprecationMessage(int contextId, const String8& method);
 
-  int count(int contextId, int consoleContextId, const String16& id);
-  bool countReset(int contextId, int consoleContextId, const String16& id);
+  int count(int contextId, int consoleContextId, const String8& id);
+  bool countReset(int contextId, int consoleContextId, const String8& id);
 
-  bool time(int contextId, int consoleContextId, const String16& label);
+  bool time(int contextId, int consoleContextId, const String8& label);
   std::optional<double> timeLog(int contextId, int consoleContextId,
-                                const String16& label);
+                                const String8& label);
   std::optional<double> timeEnd(int contextId, int consoleContextId,
-                                const String16& label);
+                                const String8& label);
 
  private:
   V8InspectorImpl* m_inspector;
@@ -143,10 +143,10 @@ class V8ConsoleMessageStorage {
 
   // Timers and counters are keyed by their `console.context()` ID
   // and their label.
-  typedef std::pair<int, String16> LabelKey;
+  typedef std::pair<int, String8> LabelKey;
 
   struct PerContextData {
-    std::set<String16> m_reportedDeprecationMessages;
+    std::set<String8> m_reportedDeprecationMessages;
     // Corresponds to https://console.spec.whatwg.org/#count-map
     std::map<LabelKey, int> m_counters;
     // Corresponds to https://console.spec.whatwg.org/#timer-table

@@ -53,17 +53,17 @@ class V8ProfilerAgentImpl : public protocol::Profiler::Backend {
       std::unique_ptr<protocol::Array<protocol::Profiler::ScriptCoverage>>*
           out_result) override;
 
-  void consoleProfile(const String16& title);
-  void consoleProfileEnd(const String16& title);
+  void consoleProfile(const String8& title);
+  void consoleProfileEnd(const String8& title);
 
-  void triggerPreciseCoverageDeltaUpdate(const String16& occasion);
+  void triggerPreciseCoverageDeltaUpdate(const String8& occasion);
 
  private:
-  String16 nextProfileId();
+  String8 nextProfileId();
 
-  void startProfiling(const String16& title);
+  void startProfiling(const String8& title);
   std::unique_ptr<protocol::Profiler::Profile> stopProfiling(
-      const String16& title, bool serialize);
+      const String8& title, bool serialize);
 
   V8InspectorSessionImpl* m_session;
   v8::Isolate* m_isolate;
@@ -74,7 +74,7 @@ class V8ProfilerAgentImpl : public protocol::Profiler::Backend {
   bool m_recordingCPUProfile = false;
   class ProfileDescriptor;
   std::vector<ProfileDescriptor> m_startedProfiles;
-  String16 m_frontendInitiatedProfileId;
+  String8 m_frontendInitiatedProfileId;
   int m_startedProfilesCount = 0;
 };
 

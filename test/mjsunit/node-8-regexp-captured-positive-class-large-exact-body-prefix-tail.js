@@ -108,11 +108,16 @@ malformed.lastIndex = 1;
 assertMatchIndices([[1, 37], [10, 28], [26, 28]], malformed, malformedSubject);
 assertEquals(37, malformed.lastIndex);
 
-// Adjacent unsupported paths retain their prior behavior.
-assertNull(
-    regexp('', '((' + classSource + '{20}))', tail9).exec(field20 + tail9));
-assertNull(regexp('', exactMixed(20), tail33).exec(field20 + tail33));
-assertNull(regexp('', exactMixed(20), String.fromCodePoint(0x4e2d))
-               .exec(field20 + cjk));
-assertNull(regexp('', exactMixed(20), tail9, 'duy').exec(field20 + tail9));
+// Generic composition covers the neighboring wrapper, tail and sticky forms.
+assertMatchIndices(
+    [[0, 49], [0, 40], [0, 40]], regexp('', '((' + classSource + '{20}))', tail9),
+    field20 + tail9);
+assertMatchIndices(
+    [[0, 73], [0, 40], [38, 40]], regexp('', exactMixed(20), tail33), field20 + tail33);
+assertMatchIndices(
+    [[0, 43], [0, 40], [38, 40]], regexp('', exactMixed(20), cjk), field20 + cjk);
+assertMatchIndices(
+    [[0, 49], [0, 40], [38, 40]], regexp('', exactMixed(20), tail9, 'duy'),
+    field20 + tail9);
+// Ignore-case composition remains a separate migration.
 assertNull(regexp('', exactMixed(20), tail9, 'dui').exec(field20 + tail9));

@@ -32,13 +32,17 @@ assertEquals(9, prefix9.length);
 assertEquals(16, prefix16.length);
 assertEquals(17, prefix17.length);
 
-// Pure-outer medium-atom forms retain their preceding behavior because their
-// exact and failure-heavy ASCII workloads do not pass the performance gate.
-assertNull(
-    /(([A-C\u00e9-\u00eb]+))123456789/du.exec(eAcute + eCircumflex + tail9));
-assertNull(
-    /prefix-123456789(([A-C\u00e9-\u00eb]{1,3}?))1234567890abcdef/du.exec(
-        prefix16 + eAcute + eCircumflex + tail16));
+// Pure-outer captures both retain the complete field, with byte indices.
+const pureOuter = assertMatchIndices(
+    [[0, 13], [0, 4], [0, 4]], /(([A-C\u00e9-\u00eb]+))123456789/du,
+    eAcute + eCircumflex + tail9);
+assertEquals([eAcute + eCircumflex, eAcute + eCircumflex], pureOuter.slice(1));
+const pureOuterLazy = assertMatchIndices(
+    [[0, 36], [16, 20], [16, 20]],
+    /prefix-123456789(([A-C\u00e9-\u00eb]{1,3}?))1234567890abcdef/du,
+    prefix16 + eAcute + eCircumflex + tail16);
+assertEquals(
+    [eAcute + eCircumflex, eAcute + eCircumflex], pureOuterLazy.slice(1));
 
 // Body-only capture keeps the final scalar; mixed outer/body capture also
 // keeps the complete field in its outer capture.
@@ -261,8 +265,11 @@ assertMatchIndices(
 assertMatchIndices(
     [[0, 13], [0, 4], [2, 4]], /(([A-C\u00e9-\u00eb]){1,9})123456789/du,
     eAcute + eCircumflex + tail9);
-assertNull(/(([A-C\u00e9-\u00eb])+)\u4e2d/du.exec(eAcute + eCircumflex + cjk));
-assertNull(
-    /(([A-C\u00e9-\u00eb])+)123456789/duy.exec(eAcute + eCircumflex + tail9));
+assertMatchIndices(
+    [[0, 7], [0, 4], [2, 4]], /(([A-C\u00e9-\u00eb])+)\u4e2d/du,
+    eAcute + eCircumflex + cjk);
+assertMatchIndices(
+    [[0, 13], [0, 4], [2, 4]], /(([A-C\u00e9-\u00eb])+)123456789/duy,
+    eAcute + eCircumflex + tail9);
 assertNull(
     /(([a-c\u00e9-\u00eb])+)123456789/dui.exec(eAcute + eCircumflex + tail9));

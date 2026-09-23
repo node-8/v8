@@ -7,6 +7,7 @@
 #include "src/flags/flags.h"
 #include "src/regexp/experimental/experimental.h"
 #include "src/regexp/regexp-ast.h"
+#include "src/strings/unicode.h"
 #include "src/zone/zone-containers.h"
 #include "src/zone/zone-list-inl.h"
 
@@ -27,13 +28,16 @@ class CanBeHandledVisitor final : private RegExpVisitor {
  public:
   static bool Check(RegExpTree* tree, RegExpFlags flags, int capture_count) {
     if (!AreSuitableFlags(flags)) return false;
-    CanBeHandledVisitor visitor{flags};
+    CanBeHandledVisitor visitor{flags, tree->min_match() == 0};
     tree->Accept(&visitor, nullptr);
     return visitor.result_;
   }
 
  private:
-  explicit CanBeHandledVisitor(RegExpFlags flags) : flags_(flags) {}
+  CanBeHandledVisitor(RegExpFlags flags, bool nullable_root)
+      : flags_(flags),
+        reject_nullable_lookarounds_(v8_flags.utf8_string_semantics &&
+                                    nullable_root) {}
 
   static bool AreSuitableFlags(RegExpFlags flags) {
     // TODO(mbid, v8:10765): We should be able to support all flags in the
@@ -68,6 +72,35 @@ class CanBeHandledVisitor final : private RegExpVisitor {
   }
 
   void* VisitClassRanges(RegExpClassRanges* node, void*) override {
+    if (!v8_flags.utf8_string_semantics) return nullptr;
+    // Initial eligibility precedes Irregexp's decoder-aware byte lowering.
+    // Negated classes need that lowering even when they exclude U+FFFD.
+    if (node->is_negated()) {
+      result_ = false;
+      return nullptr;
+    }
+    auto set = node->character_set();
+    if (set.is_standard()) {
+      switch (set.standard_set_type()) {
+        case StandardCharacterSet::kNotWhitespace:
+        case StandardCharacterSet::kNotWord:
+        case StandardCharacterSet::kNotDigit:
+        case StandardCharacterSet::kNotLineTerminator:
+        case StandardCharacterSet::kEverything:
+          result_ = false;
+          break;
+        default:
+          break;
+      }
+    } else {
+      // Nonstandard sets already own their ranges; no Zone/allocation needed.
+      for (CharacterRange range : *node->ranges(nullptr)) {
+        if (range.Contains(unibrow::Utf8::kBadChar)) {
+          result_ = false;
+          break;
+        }
+      }
+    }
     return nullptr;
   }
 
@@ -86,7 +119,17 @@ class CanBeHandledVisitor final : private RegExpVisitor {
     return nullptr;
   }
 
-  void* VisitAtom(RegExpAtom* node, void*) override { return nullptr; }
+  void* VisitAtom(RegExpAtom* node, void*) override {
+    if (v8_flags.utf8_string_semantics) {
+      for (base::uc16 unit : node->data()) {
+        if (unit == unibrow::Utf8::kBadChar) {
+          result_ = false;
+          break;
+        }
+      }
+    }
+    return nullptr;
+  }
 
   void* VisitText(RegExpText* node, void*) override {
     for (TextElement& el : *node->elements()) {
@@ -180,6 +223,13 @@ class CanBeHandledVisitor final : private RegExpVisitor {
   }
 
   void* VisitLookaround(RegExpLookaround* node, void*) override {
+    // This engine still schedules candidate threads byte by byte. Exclude at
+    // initial eligibility so neither default selection nor fallback can bypass
+    // Irregexp's scalar candidate search. Explicit /l keeps its normal error.
+    if (reject_nullable_lookarounds_) {
+      result_ = false;
+      return nullptr;
+    }
     if (IsGlobal(flags()) || IsSticky(flags())) {
       result_ = false;
       return nullptr;
@@ -214,6 +264,7 @@ class CanBeHandledVisitor final : private RegExpVisitor {
 
   bool result_ = true;
   RegExpFlags flags_;
+  bool reject_nullable_lookarounds_;
 };
 
 }  // namespace

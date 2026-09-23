@@ -265,9 +265,15 @@ class RegExpAssertion final : public RegExpTree {
     END_OF_INPUT = 3,
     BOUNDARY = 4,
     NON_BOUNDARY = 5,
-    LAST_ASSERTION_TYPE = NON_BOUNDARY,
+    NODE8_END_LITERAL = 6,
+    LAST_ASSERTION_TYPE = NODE8_END_LITERAL,
   };
   explicit RegExpAssertion(Type type) : assertion_type_(type) {}
+  RegExpAssertion(base::Vector<const base::uc16> node8_end_literal,
+                   int node8_minimum_remaining)
+      : assertion_type_(Type::NODE8_END_LITERAL),
+        node8_end_literal_(node8_end_literal),
+        node8_minimum_remaining_(node8_minimum_remaining) {}
 
   DECL_BOILERPLATE(Assertion);
 
@@ -276,9 +282,15 @@ class RegExpAssertion final : public RegExpTree {
   int min_match() override { return 0; }
   int max_match() override { return 0; }
   Type assertion_type() const { return assertion_type_; }
+  base::Vector<const base::uc16> node8_end_literal() const {
+    return node8_end_literal_;
+  }
+  int node8_minimum_remaining() const { return node8_minimum_remaining_; }
 
  private:
   const Type assertion_type_;
+  base::Vector<const base::uc16> node8_end_literal_;
+  int node8_minimum_remaining_ = 0;
 };
 
 class CharacterSet final {
@@ -302,6 +314,51 @@ class CharacterSet final {
   std::optional<StandardCharacterSet> standard_set_type_;
 };
 
+struct Node8PackedClassCheck {
+  uint32_t value;
+  uint32_t mask;
+};
+
+class Node8PackedClassGroup final : public ZoneObject {
+ public:
+  Node8PackedClassGroup(uint8_t lead_from, uint8_t lead_to, int width,
+                        uint8_t second_from, uint8_t second_to, Zone* zone)
+      : lead_from_(lead_from),
+        lead_to_(lead_to),
+        width_(width),
+        second_from_(second_from),
+        second_to_(second_to),
+        checks_(2, zone) {}
+
+  uint8_t lead_from() const { return lead_from_; }
+  uint8_t lead_to() const { return lead_to_; }
+  int width() const { return width_; }
+  uint8_t second_from() const { return second_from_; }
+  uint8_t second_to() const { return second_to_; }
+  ZoneList<Node8PackedClassCheck>* checks() { return &checks_; }
+
+ private:
+  uint8_t lead_from_;
+  uint8_t lead_to_;
+  int width_;
+  uint8_t second_from_;
+  uint8_t second_to_;
+  ZoneList<Node8PackedClassCheck> checks_;
+};
+
+class Node8PackedClassPlan final : public ZoneObject {
+ public:
+  explicit Node8PackedClassPlan(Zone* zone)
+      : ascii_ranges_(4, zone), groups_(6, zone) {}
+
+  ZoneList<CharacterRange>* ascii_ranges() { return &ascii_ranges_; }
+  ZoneList<Node8PackedClassGroup*>* groups() { return &groups_; }
+
+ private:
+  ZoneList<CharacterRange> ascii_ranges_;
+  ZoneList<Node8PackedClassGroup*> groups_;
+};
+
 class RegExpClassRanges final : public RegExpTree {
  public:
   // NEGATED: The character class is negated and should match everything but
@@ -316,6 +373,9 @@ class RegExpClassRanges final : public RegExpTree {
     NO_CASE_FOLDING_NEEDED = 1 << 2,
     IS_CERTAINLY_ONE_CODE_POINT = 1 << 3,
     IS_CERTAINLY_TWO_CODE_POINTS = 1 << 4,
+    // Compile-local ASCII dispatcher; its high-byte edge accepts one decoded
+    // scalar/maximal subpart. This is not String representation metadata.
+    NODE8_ACCEPTS_ALL_NON_ASCII = 1 << 5,
   };
   using ClassRangesFlags = base::Flags<Flag>;
 
@@ -337,6 +397,10 @@ class RegExpClassRanges final : public RegExpTree {
   // TODO(yangguo): we should split this class for usage in TextElement, and
   //                make max_match() dependent on the character class content.
   int max_match() override {
+    if (node8_accepts_all_non_ascii()) return 4;
+    if (node8_positive_non_ascii_tree_ != nullptr) {
+      return std::max(1, node8_positive_non_ascii_tree_->max_match());
+    }
     if (is_certainly_one_code_point()) {
       return 1;
     }
@@ -370,17 +434,27 @@ class RegExpClassRanges final : public RegExpTree {
   bool is_certainly_two_code_points() const {
     return (class_ranges_flags_ & IS_CERTAINLY_TWO_CODE_POINTS) != 0;
   }
+  bool node8_accepts_all_non_ascii() const {
+    return (class_ranges_flags_ & NODE8_ACCEPTS_ALL_NON_ASCII) != 0;
+  }
   RegExpTree* node8_positive_non_ascii_tree() const {
     return node8_positive_non_ascii_tree_;
   }
   void set_node8_positive_non_ascii_tree(RegExpTree* tree) {
     node8_positive_non_ascii_tree_ = tree;
   }
+  Node8PackedClassPlan* node8_packed_class_plan() const {
+    return node8_packed_class_plan_;
+  }
+  void set_node8_packed_class_plan(Node8PackedClassPlan* plan) {
+    node8_packed_class_plan_ = plan;
+  }
 
  private:
   CharacterSet set_;
   ClassRangesFlags class_ranges_flags_;
   RegExpTree* node8_positive_non_ascii_tree_ = nullptr;
+  Node8PackedClassPlan* node8_packed_class_plan_ = nullptr;
 };
 
 struct CharacterClassStringLess {

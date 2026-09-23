@@ -2251,6 +2251,34 @@ EmitResult AssertionNode::Emit(RegExpCompiler* compiler, Trace* trace) {
     case AT_NON_BOUNDARY: {
       return EmitBoundaryCheck(compiler, trace);
     }
+    case NODE8_END_LITERAL: {
+      Label restore_failure;
+      assembler->CheckPosition(trace->cp_offset() +
+                                   node8_minimum_remaining() - 1,
+                               trace->backtrack());
+      assembler->WriteCurrentPositionToRegister(node8_position_register(), 0);
+      assembler->SetCurrentPositionFromEnd(node8_end_literal().length());
+      for (int i = 0; i < node8_end_literal().length(); ++i) {
+        assembler->LoadCurrentCharacter(i, &restore_failure, true);
+        assembler->CheckNotCharacter(node8_end_literal()[i],
+                                     &restore_failure);
+      }
+      assembler->ReadCurrentPositionFromRegister(node8_position_register());
+      // Subject bytes and deferred actions are unchanged; only the loaded
+      // character register was clobbered by the tail check.
+      Trace successor_trace(*trace);
+      successor_trace.InvalidateCurrentCharacter();
+      RETURN_IF_ERROR(on_success()->Emit(compiler, &successor_trace));
+
+      assembler->Bind(&restore_failure);
+      assembler->ReadCurrentPositionFromRegister(node8_position_register());
+      if (trace->characters_preloaded() != 0) {
+        assembler->LoadCurrentCharacter(trace->cp_offset(), trace->backtrack(),
+                                        true, trace->characters_preloaded());
+      }
+      assembler->GoTo(trace->backtrack());
+      return EmitResult::Success();
+    }
   }
   return on_success()->Emit(compiler, trace);
 }
@@ -2505,6 +2533,21 @@ EmitResult TextNode::Emit(RegExpCompiler* compiler, Trace* trace) {
 
 EmitResult Wtf8ScalarNode::Emit(RegExpCompiler* compiler, Trace* trace) {
   TRACE_EMIT("Wtf8Scalar");
+  if (is_any_scalar_) {
+    if (!trace->is_trivial()) return trace->Flush(compiler, this);
+    LimitResult limit_result = LimitVersions(compiler, trace);
+    if (limit_result == DONE) return EmitResult::Success();
+    DCHECK_EQ(limit_result, CONTINUE);
+
+    RegExpMacroAssembler* assembler = compiler->macro_assembler();
+    // The shared emitter's first load is unchecked. End is tried by the body,
+    // but must never be consumed by the failed-candidate advance edge.
+    assembler->CheckPosition(0, trace->backtrack());
+    assembler->AdvanceUtf8Position();
+    Trace successor_trace;
+    RecursionCheck rc(compiler);
+    return on_success()->Emit(compiler, &successor_trace);
+  }
   if (is_positive_class_) {
     LimitResult limit_result = LimitVersions(compiler, trace);
     if (limit_result == DONE) return EmitResult::Success();
@@ -2515,16 +2558,66 @@ EmitResult Wtf8ScalarNode::Emit(RegExpCompiler* compiler, Trace* trace) {
     Label non_ascii;
     assembler->LoadCurrentCharacter(trace->cp_offset(), trace->backtrack(),
                                     true);
-    for (CharacterRange range : *positive_ascii_ranges_) {
-      if (range.from() == range.to()) {
-        assembler->CheckCharacter(range.from(), &ascii_match);
-      } else {
-        assembler->CheckCharacterInRange(range.from(), range.to(),
-                                         &ascii_match);
+    const int range_count = positive_ascii_ranges_->length();
+    const bool full_ascii =
+        range_count == 1 && positive_ascii_ranges_->first().from() == 0 &&
+        positive_ascii_ranges_->first().to() == 0x7f;
+    int excluded_from = 0;
+    int excluded_to = -1;
+    if (range_count == 1 && !full_ascii) {
+      CharacterRange range = positive_ascii_ranges_->first();
+      if (range.from() == 0) {
+        excluded_from = range.to() + 1;
+        excluded_to = 0x7f;
+      } else if (range.to() == 0x7f) {
+        excluded_to = range.from() - 1;
       }
+    } else if (range_count == 2 &&
+               positive_ascii_ranges_->first().from() == 0 &&
+               positive_ascii_ranges_->last().to() == 0x7f) {
+      excluded_from = positive_ascii_ranges_->first().to() + 1;
+      excluded_to = positive_ascii_ranges_->last().from() - 1;
     }
-    assembler->CheckCharacterGT(0x7f, &non_ascii);
-    assembler->GoTo(trace->backtrack());
+    if (full_ascii || excluded_from <= excluded_to) {
+      // Preserve the single exclusion check for complements of an ASCII
+      // interval. Non-ASCII bytes must reach the variable-width edge.
+      if (excluded_from == excluded_to) {
+        assembler->CheckCharacter(excluded_from, trace->backtrack());
+      } else if (excluded_from < excluded_to) {
+        assembler->CheckCharacterInRange(excluded_from, excluded_to,
+                                         trace->backtrack());
+      }
+      assembler->CheckCharacterGT(0x7f, &non_ascii);
+    } else if (range_count > 16) {
+      // Build once while compiling. The high-byte check prevents the table's
+      // modulo-128 indexing from accepting a non-ASCII byte as an ASCII member.
+      static_assert(RegExpMacroAssembler::kTableSize == 0x80);
+      Handle<ByteArray> table = assembler->isolate()->factory()->NewByteArray(
+          RegExpMacroAssembler::kTableSize, AllocationType::kOld);
+      for (int byte = 0; byte < RegExpMacroAssembler::kTableSize; ++byte) {
+        table->set(byte, 0);
+      }
+      for (CharacterRange range : *positive_ascii_ranges_) {
+        DCHECK_LE(range.to(), 0x7f);
+        for (base::uc32 byte = range.from(); byte <= range.to(); ++byte) {
+          table->set(byte, 1);
+        }
+      }
+      assembler->CheckCharacterGT(0x7f, &non_ascii);
+      assembler->CheckBitInTable(table, &ascii_match);
+      assembler->GoTo(trace->backtrack());
+    } else {
+      for (CharacterRange range : *positive_ascii_ranges_) {
+        if (range.from() == range.to()) {
+          assembler->CheckCharacter(range.from(), &ascii_match);
+        } else {
+          assembler->CheckCharacterInRange(range.from(), range.to(),
+                                           &ascii_match);
+        }
+      }
+      assembler->CheckCharacterGT(0x7f, &non_ascii);
+      assembler->GoTo(trace->backtrack());
+    }
 
     assembler->Bind(&ascii_match);
     Trace successor_trace(*trace);
@@ -2536,7 +2629,166 @@ EmitResult Wtf8ScalarNode::Emit(RegExpCompiler* compiler, Trace* trace) {
     Trace non_ascii_trace(*trace);
     // A variable-width scalar must not reach the one-byte special-loop edge.
     non_ascii_trace.set_special_loop_state(nullptr);
-    return positive_non_ascii_node_->Emit(compiler, &non_ascii_trace);
+    Node8PackedClassPlan* plan = positive_packed_class_plan();
+    if (plan == nullptr) {
+      return positive_non_ascii_node_->Emit(compiler, &non_ascii_trace);
+    }
+
+    DCHECK_EQ(plan->groups()->length(), 6);
+    Label lead2, lead3_e0, lead3, lead4_f0, lead4, lead4_f4;
+    Label narrow2, narrow3_e0, narrow3, narrow4_f0, narrow4, narrow4_f4;
+    Label consume1, consume2, consume3, consume4;
+    Label* leads[] = {&lead2, &lead3_e0, &lead3,
+                      &lead4_f0, &lead4, &lead4_f4};
+    Label* narrows[] = {&narrow2, &narrow3_e0, &narrow3,
+                        &narrow4_f0, &narrow4, &narrow4_f4};
+    Label* consumes[] = {nullptr, &consume1, &consume2, &consume3, &consume4};
+
+    assembler->CheckCharacterLT(0xc2, &consume1);
+    assembler->CheckCharacterLT(0xe0, &lead2);
+    assembler->CheckCharacter(0xe0, &lead3_e0);
+    assembler->CheckCharacterLT(0xf0, &lead3);
+    assembler->CheckCharacter(0xf0, &lead4_f0);
+    assembler->CheckCharacterLT(0xf4, &lead4);
+    assembler->CheckCharacter(0xf4, &lead4_f4);
+    assembler->GoTo(&consume1);
+
+    for (int group_index = 0; group_index < plan->groups()->length();
+         ++group_index) {
+      Node8PackedClassGroup* group = plan->groups()->at(group_index);
+      assembler->Bind(leads[group_index]);
+      if (!assembler->CanReadUnaligned()) {
+        // Preserve scalar semantics when packed loads are disabled, including
+        // slow-safe compilation. All reads remain relative to the same cursor.
+        for (Node8PackedClassCheck check : *group->checks()) {
+          Label next_member;
+          for (int byte = 0; byte < group->width(); ++byte) {
+            assembler->LoadCurrentCharacter(
+                non_ascii_trace.cp_offset() + byte, &next_member, true);
+            assembler->CheckNotCharacterAfterAnd(
+                (check.value >> (8 * byte)) & 0xff,
+                (check.mask >> (8 * byte)) & 0xff, &next_member);
+          }
+          assembler->GoTo(consumes[group->width()]);
+          assembler->Bind(&next_member);
+        }
+        for (int byte = 1; byte < group->width(); ++byte) {
+          assembler->LoadCurrentCharacter(
+              non_ascii_trace.cp_offset() + byte, consumes[byte], true);
+          assembler->CheckCharacterNotInRange(
+              byte == 1 ? group->second_from() : 0x80,
+              byte == 1 ? group->second_to() : 0xbf, consumes[byte]);
+        }
+        assembler->GoTo(non_ascii_trace.backtrack());
+        continue;
+      }
+      const int load_width = group->width() == 2 ? 2 : 4;
+      assembler->LoadCurrentCharacter(non_ascii_trace.cp_offset(),
+                                      narrows[group_index], true, load_width);
+      for (Node8PackedClassCheck check : *group->checks()) {
+        assembler->CheckCharacterAfterAnd(check.value, check.mask,
+                                          consumes[group->width()]);
+      }
+
+      const uint32_t trailing_mask =
+          group->width() == 2
+              ? 0
+              : (group->width() == 3 ? 0x00c00000 : 0xc0c00000);
+      const uint32_t trailing_value =
+          group->width() == 2
+              ? 0
+              : (group->width() == 3 ? 0x00800000 : 0x80800000);
+      if (group->second_from() == 0x90 && group->second_to() == 0xbf) {
+        assembler->CheckCharacterAfterAnd(
+            trailing_value | 0x00009000,
+            trailing_mask | 0x0000f000, non_ascii_trace.backtrack());
+        assembler->CheckCharacterAfterAnd(
+            trailing_value | 0x0000a000,
+            trailing_mask | 0x0000e000, non_ascii_trace.backtrack());
+      } else {
+        const unsigned second_size =
+            group->second_to() - group->second_from() + 1;
+        const uint32_t second_mask =
+            static_cast<uint8_t>(~(second_size - 1));
+        const uint32_t second_value = group->second_from() & second_mask;
+        assembler->CheckCharacterAfterAnd(
+            trailing_value | (second_value << 8),
+            trailing_mask | (second_mask << 8),
+            non_ascii_trace.backtrack());
+      }
+
+      // For a two-byte scalar, complete validity tested the only continuation.
+      // Reaching this point already proves a one-byte malformed subpart.
+      if (group->width() == 2) {
+        assembler->GoTo(&consume1);
+        continue;
+      }
+
+      Label second_valid;
+      if (group->second_from() == 0x90 && group->second_to() == 0xbf) {
+        assembler->CheckCharacterAfterAnd(0x00009000, 0x0000f000,
+                                          &second_valid);
+        assembler->CheckCharacterAfterAnd(0x0000a000, 0x0000e000,
+                                          &second_valid);
+      } else {
+        const unsigned second_size =
+            group->second_to() - group->second_from() + 1;
+        const uint32_t second_mask =
+            static_cast<uint8_t>(~(second_size - 1));
+        const uint32_t second_value = group->second_from() & second_mask;
+        assembler->CheckCharacterAfterAnd(second_value << 8,
+                                          second_mask << 8, &second_valid);
+      }
+      assembler->GoTo(&consume1);
+      assembler->Bind(&second_valid);
+      if (group->width() == 3) {
+        assembler->GoTo(&consume2);
+      } else {
+        Label third_valid;
+        assembler->CheckCharacterAfterAnd(0x00800000, 0x00c00000,
+                                          &third_valid);
+        assembler->GoTo(&consume2);
+        assembler->Bind(&third_valid);
+        assembler->GoTo(&consume3);
+      }
+    }
+
+    for (int group_index = 0; group_index < plan->groups()->length();
+         ++group_index) {
+      Node8PackedClassGroup* group = plan->groups()->at(group_index);
+      assembler->Bind(narrows[group_index]);
+      assembler->LoadCurrentCharacter(non_ascii_trace.cp_offset() + 1,
+                                      &consume1, true);
+      Label second_valid;
+      assembler->CheckCharacterInRange(group->second_from(),
+                                       group->second_to(), &second_valid);
+      assembler->GoTo(&consume1);
+      assembler->Bind(&second_valid);
+      if (group->width() == 3) {
+        assembler->GoTo(&consume2);
+      } else if (group->width() == 4) {
+        assembler->LoadCurrentCharacter(non_ascii_trace.cp_offset() + 2,
+                                        &consume2, true);
+        assembler->CheckCharacterInRange(0x80, 0xbf, &consume3);
+        assembler->GoTo(&consume2);
+      } else {
+        assembler->GoTo(&consume1);
+      }
+    }
+
+    auto emit_success = [&](Label* label, int width) {
+      assembler->Bind(label);
+      Trace successor_trace(non_ascii_trace);
+      RETURN_IF_ERROR(
+          successor_trace.AdvanceCurrentPositionInTrace(width, compiler));
+      RecursionCheck rc(compiler);
+      return on_success()->Emit(compiler, &successor_trace);
+    };
+    RETURN_IF_ERROR(emit_success(&consume1, 1));
+    RETURN_IF_ERROR(emit_success(&consume2, 2));
+    RETURN_IF_ERROR(emit_success(&consume3, 3));
+    RETURN_IF_ERROR(emit_success(&consume4, 4));
+    return EmitResult::Success();
   }
   if (is_slow_node_ && !trace->is_trivial()) {
     return trace->Flush(compiler, this);
@@ -3449,7 +3701,17 @@ int ChoiceNode::EmitOptimizedUnanchoredSearch(
   }
   RegExpNode* eats_anything_node = alt1.node();
   if (eats_anything_node->GetSuccessorOfOmnivorousTextNode(compiler) != this) {
-    return eats_at_least;
+    // Lowering can remove a nullable branch, e.g. (?:(?=[])|ZZZZ)/v. Keep
+    // its byte-skip optimization when graph analysis proves every successful
+    // path consumes input. Complete consumers or a separately proved leading
+    // consumer reject interior continuations; the fallback still advances by
+    // the local decoder width.
+    auto* scalar = eats_anything_node->AsWtf8ScalarNode();
+    if (scalar == nullptr || !scalar->is_any_scalar() ||
+        !scalar->allow_byte_skip() || scalar->on_success() != this ||
+        EatsAtLeast(false) == 0) {
+      return eats_at_least;
+    }
   }
 
   // Really we should be creating a new trace when we execute this function,
@@ -4310,7 +4572,30 @@ RegExpNode* RegExpCompiler::PreprocessRegExp(RegExpCompileData* data,
   RegExpNode* captured_body =
       RegExpCapture::ToNode(data->tree, 0, this, accept());
   RegExpNode* node = captured_body;
-  if (!data->tree->IsAnchoredAtStart() && !IsSticky(flags())) {
+  if (!data->tree->IsAnchoredAtStart() && !IsSticky(flags()) &&
+      data->node8_scalar_search) {
+    // Keep the search prefix outside capture #0. Every failed candidate advances
+    // by a scalar, including the separate first step for expressions with '^'.
+    auto* loop = zone()->New<LoopChoiceNode>(false, false, zone());
+    auto* advance =
+        zone()->New<Wtf8ScalarNode>(loop, !data->node8_decoder_sensitive);
+    loop->AddContinueAlternative(GuardedAlternative(captured_body));
+    loop->AddLoopAlternative(GuardedAlternative(advance));
+    REGISTER_NODE(advance);
+    REGISTER_NODE(loop);
+    node = loop;
+    if (data->contains_anchor) {
+      loop->set_not_at_start();
+      auto* first_step = zone()->New<ChoiceNode>(2, zone());
+      auto* first_advance =
+          zone()->New<Wtf8ScalarNode>(loop, !data->node8_decoder_sensitive);
+      first_step->AddAlternative(GuardedAlternative(captured_body));
+      first_step->AddAlternative(GuardedAlternative(first_advance));
+      REGISTER_NODE(first_advance);
+      REGISTER_NODE(first_step);
+      node = first_step;
+    }
+  } else if (!data->tree->IsAnchoredAtStart() && !IsSticky(flags())) {
     // Add a .*? at the beginning, outside the body capture, unless
     // this expression is anchored at the beginning or sticky.
     TRACE_GRAPH("* Add .*? at beginning of unanchored, non-sticky RegExp");

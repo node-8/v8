@@ -555,11 +555,27 @@ RegExpNode* RegExpClassRanges::ToNodeImpl(RegExpCompiler* compiler,
   Zone* const zone = compiler->zone();
   ZoneList<CharacterRange>* ranges = this->ranges(zone);
 
-  if (node8_positive_non_ascii_tree() != nullptr) {
+  if (node8_packed_class_plan() != nullptr) {
+    DCHECK(!is_negated());
+    Wtf8ScalarNode* result = zone->New<Wtf8ScalarNode>(
+        node8_packed_class_plan()->ascii_ranges(),
+        node8_packed_class_plan(), on_success);
+    REGISTER_NODE(result);
+    return result;
+  }
+
+  if (node8_positive_non_ascii_tree() != nullptr ||
+      node8_accepts_all_non_ascii()) {
     DCHECK(!is_negated());
     DCHECK(ranges->is_empty() || ranges->last().to() <= 0x7f);
-    RegExpNode* non_ascii_node =
-        node8_positive_non_ascii_tree()->ToNode(compiler, on_success);
+    RegExpNode* non_ascii_node;
+    if (node8_accepts_all_non_ascii()) {
+      non_ascii_node = zone->New<Wtf8ScalarNode>(on_success, false);
+      REGISTER_NODE(non_ascii_node);
+    } else {
+      non_ascii_node =
+          node8_positive_non_ascii_tree()->ToNode(compiler, on_success);
+    }
     Wtf8ScalarNode* result =
         zone->New<Wtf8ScalarNode>(ranges, non_ascii_node, on_success);
     REGISTER_NODE(result);
@@ -1293,6 +1309,13 @@ RegExpNode* RegExpAssertion::ToNodeImpl(RegExpCompiler* compiler,
     }
     case Type::END_OF_INPUT: {
       RegExpNode* node = AssertionNode::AtEnd(on_success);
+      REGISTER_NODE(node);
+      return node;
+    }
+    case Type::NODE8_END_LITERAL: {
+      RegExpNode* node = AssertionNode::Node8EndLiteral(
+          node8_end_literal(), node8_minimum_remaining(),
+          compiler->AllocateRegister(), on_success);
       REGISTER_NODE(node);
       return node;
     }

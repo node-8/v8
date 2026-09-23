@@ -226,8 +226,9 @@ for (const input of corpora) {
 assertMatchIndices(
     [[0, 6], [0, 4], [2, 4]], /(([A-C\u00e9-\u00eb]){1,8})xy/du,
     eAcute + eCircumflex + 'xy');
-assertNull(
-    /(([A-C\u00e9-\u00eb]{1,20}))xy/du.exec(eAcute + eCircumflex + 'xy'));
+assertMatchIndices(
+    [[0, 6], [0, 4], [0, 4]], /(([A-C\u00e9-\u00eb]{1,20}))xy/du,
+    eAcute + eCircumflex + 'xy');
 assertMatchIndices(
     [[0, 42], [0, 40], [38, 40]], /(([A-C\u00e9-\u00eb]){20})xy/du,
     (eAcute + eCircumflex).repeat(10) + 'xy');
@@ -235,9 +236,11 @@ assertMatchIndices(
     [[0, 21], [0, 4], [2, 4]],
     /(([A-C\u00e9-\u00eb]){1,20})1234567890abcdefg/du,
     eAcute + eCircumflex + '1234567890abcdefg');
-assertNull(
-    /(([A-C\u00e9-\u00eb]){1,20})\u4e2d/du.exec(eAcute + eCircumflex + cjk));
-assertNull(
-    /(([A-C\u00e9-\u00eb]){1,20})xy/duy.exec(eAcute + eCircumflex + 'xy'));
+assertMatchIndices(
+    [[0, 7], [0, 4], [2, 4]], /(([A-C\u00e9-\u00eb]){1,20})\u4e2d/du,
+    eAcute + eCircumflex + cjk);
+assertMatchIndices(
+    [[0, 6], [0, 4], [2, 4]], /(([A-C\u00e9-\u00eb]){1,20})xy/duy,
+    eAcute + eCircumflex + 'xy');
 assertNull(
     /(([a-c\u00e9-\u00eb]){1,20})xy/dui.exec(eAcute + eCircumflex + 'xy'));

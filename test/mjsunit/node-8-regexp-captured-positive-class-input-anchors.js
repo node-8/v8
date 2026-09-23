@@ -60,19 +60,29 @@ assertMatchIndices(
     [[2, 12], [6, 11], [8, 11]], regexp('', mixedExact, ''),
     'zz' + prefix + field + tail);
 
-// Adjacent assertion and selector forms remain on their prior paths.
-assertNull(regexp('', mixedExact, '$').exec('zz' + prefix + field + tail));
-assertNull(
-    regexp('^', '((' + classSource + '+))', '$').exec(prefix + field + tail));
-assertNull(
-    regexp('^', '((' + classSource + ')+)', '$').exec(prefix + field + tail));
+// Generic composition covers end-only anchors and unbounded capture wrappers.
+assertMatchIndices(
+    [[2, 12], [6, 11], [8, 11]], regexp('', mixedExact, '$'),
+    'zz' + prefix + field + tail);
+assertMatchIndices(
+    [[0, 10], [4, 9], [4, 9]], regexp('^', '((' + classSource + '+))', '$'),
+    prefix + field + tail);
+assertMatchIndices(
+    [[0, 10], [4, 9], [6, 9]], regexp('^', '((' + classSource + ')+)', '$'),
+    prefix + field + tail);
+// Multiline and word boundaries remain separate migrations.
 assertNull(regexp('^', mixedExact, '$', 'dmu').exec(prefix + field + tail));
 assertNull(new RegExp('^\\b' + prefix + mixedExact + tail + '$', 'du')
                .exec(prefix + field + tail));
-assertNull(
-    new RegExp('^(?=' + prefix + ')' + prefix + mixedExact + tail + '$', 'du')
-        .exec(prefix + field + tail));
-assertNull(regexp('^', '((' + classSource + '){1})', '$')
-               .exec(prefix + eAcute + tail));
-assertNull(regexp('^', mixedExact, '$', 'duy').exec(prefix + field + tail));
+// Nonempty composed lookahead preserves the Unicode field captures.
+assertEquals(['key=' + field + tail, field, cjk], Array.from(assertMatchIndices(
+    [[0, 10], [4, 9], [6, 9]],
+    new RegExp('^(?=' + prefix + ')' + prefix + mixedExact + tail + '$', 'du'),
+    prefix + field + tail)));
+assertMatchIndices(
+    [[0, 7], [4, 6], [4, 6]], regexp('^', '((' + classSource + '){1})', '$'),
+    prefix + eAcute + tail);
+assertMatchIndices(
+    [[0, 10], [4, 9], [6, 9]], regexp('^', mixedExact, '$', 'duy'),
+    prefix + field + tail);
 assertNull(regexp('^', mixedExact, '$', 'dui').exec(prefix + field + tail));
