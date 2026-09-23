@@ -884,11 +884,10 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
       Node8ComposedState sensitive;
       RegExpTree* lowered = GetNode8ComposedLiteralByteTree(
           group->body(), group->flags(), zone, &sensitive, depth + 1);
-      if (lowered == nullptr || sensitive.contains_backreference) {
-        return false;
-      }
+      if (lowered == nullptr) return false;
       state->classes.contains_lookaround |= sensitive.contains_lookaround;
       state->classes.contains_lookbehind |= sensitive.contains_lookbehind;
+      state->classes.contains_backreference |= sensitive.contains_backreference;
       state->classes.contains_decoder |= sensitive.contains_decoder;
       state->classes.contains_forward_dispatch |=
           sensitive.contains_forward_dispatch;
@@ -3218,6 +3217,8 @@ bool RegExpImpl::CompileIrregexpFromSource(
           state.classes.contains_word_assertion) &&
          original_tree->min_match() == 0);
     if (lowered && !literals.is_empty() &&
+        !(state.classes.contains_decoder &&
+          state.classes.contains_backreference) &&
         !(state.classes.contains_lookbehind &&
           (state.classes.contains_decoder ||
            state.classes.contains_forward_dispatch)) &&

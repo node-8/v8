@@ -148,7 +148,6 @@
   for(const item of rows) {
     item.source='(?-i:'+item.source+')';
     item.extraFlags+='i';
-    if(item.id==='backref') item.condition='stock';
   }
   const local=(id,source,subject,values,bytes,stock,condition='all',flags='i',start=0,names)=>
     row(id,source,subject,values,bytes,stock,condition,flags,start,names);

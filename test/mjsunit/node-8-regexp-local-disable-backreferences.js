@@ -3,7 +3,7 @@
 // found in the LICENSE file.
 
 // Fixed oracles. Intended profile is checked by the driver.
-// Fixed stock/byte oracles for reverse-safe local-i-disable lookbehinds.
+// Fixed stock/byte oracles for local-i-disable backreferences.
 'use strict';
 
 (() => {
@@ -56,130 +56,109 @@
   const row=(id,source,subject,values,bytes,stock,
              condition='all',extraFlags='i',start=0,names)=>
     ({id,source:'(?-i:'+source+')',subject,values,bytes,stock,condition,extraFlags,start,names});
-  const rows=[],bang=ascii('!');
-  for(const [name,pattern,target,fold] of [
-    ['latin',E,E,'all'],['kelvin',K,K,'all'],
-    ['long-s',S,S,'all'],['cjk',C,C,'all'],
-    ['ascii',ascii('a'),ascii('a'),'all']
+  const rows=[],bang=ascii('!'),x=ascii('X');
+  for(const [name,target] of [
+    ['latin',E],['cjk',C],['astral',A],['kelvin',K],['long-s',S],['ascii',ascii('a')]
   ]) {
-    const p=string(pattern),b=target.bytes.length,s=target.stock.length;
-    const subject=join(target,bang),double=join(target,target,bang);
+    const p=string(target),b=target.bytes.length,s=target.stock.length;
+    const pair=join(target,target),triple=join(pair,target),four=join(pair,pair);
     rows.push(
-      row(name+'positive','(?<='+p+')(!)',subject,[bang,bang],
-        [[b,b+1],[b,b+1]],[[s,s+1],[s,s+1]],fold),
-      row(name+'negative','(?<!'+p+')(!)',subject,[bang,bang],
-        [[b,b+1],[b,b+1]],[[s,s+1],[s,s+1]],fold==='unicode'?'stock-legacy':'never'),
-      row(name+'negative-other','(?<!'+p+')(!)',bang,[bang,bang],
-        [[0,1],[0,1]],[[0,1],[0,1]]),
-      row(name+'zero-positive','(?<=('+p+'))',subject,[empty,target],
-        [[b,b],[0,b]],[[s,s],[0,s]],fold),
-      row(name+'zero-negative','(?<!'+p+')()',target,[empty,empty],
-        [[0,0],[0,0]],[[0,0],[0,0]]),
-      row(name+'nested-backward','(?<=(?<='+p+')!)(!)',join(subject,bang),[bang,bang],
-        [[b+1,b+2],[b+1,b+2]],[[s+1,s+2],[s+1,s+2]],fold),
-      row(name+'nested-forward','(?<=('+p+')(?=!))(!)',subject,[bang,target,bang],
-        [[b,b+1],[0,b],[b,b+1]],[[s,s+1],[0,s],[s,s+1]],fold),
-      row(name+'alternation','(?<=('+p+'|#))(!)',subject,[bang,target,bang],
-        [[b,b+1],[0,b],[b,b+1]],[[s,s+1],[0,s],[s,s+1]],fold),
-      row(name+'greedy-capture','(?<=((?:'+p+')+))(!)',double,
-        [bang,join(target,target),bang],
-        [[2*b,2*b+1],[0,2*b],[2*b,2*b+1]],
-        [[2*s,2*s+1],[0,2*s],[2*s,2*s+1]],fold),
-      row(name+'lazy-capture','(?<=((?:'+p+')+?))(!)',double,[bang,target,bang],
-        [[2*b,2*b+1],[b,2*b],[2*b,2*b+1]],
-        [[2*s,2*s+1],[s,2*s],[2*s,2*s+1]],fold),
-      row(name+'repeated-capture','(?<=(('+p+')+))(!)',double,
-        [bang,join(target,target),target,bang],
-        [[2*b,2*b+1],[0,2*b],[0,b],[2*b,2*b+1]],
-        [[2*s,2*s+1],[0,2*s],[0,s],[2*s,2*s+1]],fold),
-      row(name+'cleared-capture','(?<!('+p+'))(!)',bang,[bang,undefined,bang],
-        [[0,1],undefined,[0,1]],[[0,1],undefined,[0,1]])
+      row(name+'pair','('+p+')\\1',pair,[pair,target],[[0,2*b],[0,b]],[[0,2*s],[0,s]]),
+      row(name+'forward','\\1('+p+')',target,[target,target],[[0,b],[0,b]],[[0,s],[0,s]]),
+      row(name+'self','('+p+'\\1)',target,[target,target],[[0,b],[0,b]],[[0,s],[0,s]]),
+      row(name+'nested','(('+p+')\\2)\\1',four,[four,pair,target],
+        [[0,4*b],[0,2*b],[0,b]],[[0,4*s],[0,2*s],[0,s]]),
+      row(name+'greedy','('+p+')+\\1',triple,[triple,target],
+        [[0,3*b],[b,2*b]],[[0,3*s],[s,2*s]]),
+      row(name+'lazy','('+p+')+?\\1',triple,[pair,target],
+        [[0,2*b],[0,b]],[[0,2*s],[0,s]]),
+      row(name+'reference-count','('+p+')\\1{2}',triple,[triple,target],
+        [[0,3*b],[0,b]],[[0,3*s],[0,s]]),
+      row(name+'reference-star','('+p+')\\1*',triple,[triple,target],
+        [[0,3*b],[0,b]],[[0,3*s],[0,s]]),
+      row(name+'unmatched','('+p+')?X\\1',x,[x,undefined],
+        [[0,1],undefined],[[0,1],undefined]),
+      row(name+'cleared','(?:(?:('+p+'))|X)+\\1',join(target,x),[join(target,x),undefined],
+        [[0,b+1],undefined],[[0,s+1],undefined]),
+      row(name+'zero-count','('+p+'){0}\\1',empty,[empty,undefined],
+        [[0,0],undefined],[[0,0],undefined]),
+      row(name+'empty-loop','(('+p+')?)*\\2',empty,[empty,undefined,undefined],
+        [[0,0],undefined,undefined],[[0,0],undefined,undefined]),
+      row(name+'anchored','^('+p+')\\1$',pair,[pair,target],[[0,2*b],[0,b]],[[0,2*s],[0,s]]),
+      row(name+'branch','(?:none|('+p+')\\1)',pair,[pair,target],
+        [[0,2*b],[0,b]],[[0,2*s],[0,s]]),
+      row(name+'lookahead','(?=('+p+'))\\1',target,[target,target],
+        [[0,b],[0,b]],[[0,s],[0,s]]),
+      row(name+'reverse-before','(?<=\\1('+p+'))(!)',join(pair,bang),[bang,target,bang],
+        [[2*b,2*b+1],[b,2*b],[2*b,2*b+1]],[[2*s,2*s+1],[s,2*s],[2*s,2*s+1]]),
+      row(name+'reverse-after','(?<=('+p+')\\1)(!)',join(target,bang),[bang,target,bang],
+        [[b,b+1],[0,b],[b,b+1]],[[s,s+1],[0,s],[s,s+1]])
     );
   }
   for(const item of [...rows]) {
     rows.push({...item,id:'local-'+item.id,source:'(?i:'+item.source+')',extraFlags:''});
   }
-  const e=string(E),c=string(C),r=string(R),double=join(E,E);
-  rows.push(
-    row('ascii-one-scalar','(?<!^)(?<!$)',E,null),
-    row('ascii-end','(?<!^)',E,[empty],[[2,2]],[[1,1]]),
-    row('ascii-two-scalars','(?<!^)(?<!$)',join(E,C),[empty],[[2,2]],[[1,1]])
-  );
-  for(const flag of ['g','y'])for(const [name,bo,so] of [
-    ['start',0,0],['inside',1,0],['after',2,1],['end',4,2]
-  ]) {
-    const found=flag==='g'||name==='after'||name==='end';
-    const bp=name==='end'?4:2,sp=name==='end'?2:1;
-    rows.push(row(flag+name,'(?<=('+e+'))',double,found?[empty,E]:null,
-      [[bp,bp],[bp-2,bp]],[[sp,sp],[sp-1,sp]],'all','i'+flag,byte?bo:so));
-  }
-  const ec=join(E,C),upper=join(EC,C),malformed=join(raw([0x80]),C);
+  const e=string(E),c=string(C),r=string(R),pair=join(E,E),upperPair=join(EC,EC);
   const plain=(...args)=>{
     const item=row(...args);
     item.source=args[1];
     return item;
   };
   rows.push(
-    row('positive-class','(?<=['+e+c+'])(!)',join(E,bang),[bang,bang],
-      [[2,3],[2,3]],[[1,2],[1,2]]),
-    row('case-reject','(?<='+e+')('+c+')',upper,null),
-    row('kelvin-reject','(?<=k)(!)',join(K,bang),null),
-    row('long-s-reject','(?<=s)(!)',join(S,bang),null),
-    row('ascii-reject','(?<=a)(!)',ascii('A!'),null),
-    row('nested-enable','(?<=(?i:('+e+')))('+c+')',upper,[C,EC,C],
-      [[2,5],[0,2],[2,5]],[[1,2],[0,1],[1,2]]),
-    row('nested-enable-disable','(?<=(?i:(?-i:('+e+'))))('+c+')',ec,[C,E,C],
-      [[2,5],[0,2],[2,5]],[[1,2],[0,1],[1,2]]),
-    row('nested-enable-reject','(?<=(?i:(?-i:'+e+')))('+c+')',upper,null),
-    plain('restore-after','(?-i:(?<='+e+')('+c+'))('+e+')',join(E,C,EC),
-      [join(C,EC),C,EC],[[2,7],[2,5],[5,7]],[[1,3],[1,2],[2,3]]),
-    plain('restore-before','('+e+')(?-i:(?<='+c+')(!))',join(C,EC,bang),null),
-    row('local-m','(?m:(?<=^'+e+')('+c+')$)',join(LS,E,C,PS),[C,C],
-      [[5,8],[5,8]],[[2,3],[2,3]]),
-    row('named','(?<=(?<before>'+e+'))(?<after>'+c+')',ec,[C,E,C],
-      [[2,5],[0,2],[2,5]],[[1,2],[0,1],[1,2]],'all','i',0,{before:1,after:2}),
-    row('optional-empty','^(?:(?<=('+e+'))('+c+'))?$',empty,[empty,undefined,undefined],
-      [[0,0],undefined,undefined],[[0,0],undefined,undefined]),
-    row('optional-full','(?:(?<=('+e+'))('+c+'))?$',ec,[C,E,C],
-      [[2,5],[0,2],[2,5]],[[1,2],[0,1],[1,2]]),
-    row('branches','(?:(?<=('+e+'))('+c+')|(?<=('+c+'))(!))',join(C,bang),
-      [bang,undefined,undefined,C,bang],
-      [[3,4],undefined,undefined,[0,3],[3,4]],
-      [[1,2],undefined,undefined,[0,1],[1,2]]),
-    row('boundaries','(?<=\\B('+e+'))\\B('+c+')',ec,[C,E,C],
-      [[2,5],[0,2],[2,5]],[[1,2],[0,1],[1,2]]),
-    row('decoder-inside-excluded','(?<=.)('+c+')',malformed,[C,C],
-      [[1,4],[1,4]],[[1,2],[1,2]],'stock'),
-    row('decoder-outside-excluded','(?<='+e+')([^a])',ec,[C,C],
-      [[2,5],[2,5]],[[1,2],[1,2]],'stock'),
-    row('dispatch-inside-excluded','(?<=[^a'+r+'])('+c+')',ec,[C,C],
-      [[2,5],[2,5]],[[1,2],[1,2]],'stock'),
-    row('dispatch-outside-excluded','(?<='+e+')([^a'+r+'])',ec,[C,C],
-      [[2,5],[2,5]],[[1,2],[1,2]],'stock'),
-    row('astral-sensitive','(?<='+string(A)+')('+c+')',join(A,C),[C,C],
-      [[4,7],[4,7]],[[2,3],[2,3]]),
-    row('backref-excluded','(?<=('+e+')\\1)('+c+')',join(double,C),[C,E,C],
+    row('reject-case','('+e+')\\1',join(E,EC),null),
+    plain('external-upper','('+e+')(?-i:\\1)',upperPair,[upperPair,EC],
+      [[0,4],[0,2]],[[0,2],[0,1]]),
+    plain('external-reject','('+e+')(?-i:\\1)',join(EC,E),null),
+    plain('restore-tail','(?-i:('+e+')\\1)('+e+')',join(E,E,EC),[join(E,E,EC),E,EC],
+      [[0,6],[0,2],[4,6]],[[0,3],[0,1],[2,3]]),
+    row('nested-enable','(?i:('+e+'))\\1',upperPair,[upperPair,EC],
+      [[0,4],[0,2]],[[0,2],[0,1]]),
+    row('nested-enable-reject','(?i:('+e+'))\\1',join(EC,E),null),
+    row('named','(?<name>'+e+')\\k<name>',pair,[pair,E],
+      [[0,4],[0,2]],[[0,2],[0,1]],'all','i',0,{name:1}),
+    plain('local-root','(?i:(?-i:('+e+')\\1))',pair,[pair,E],
+      [[0,4],[0,2]],[[0,2],[0,1]],'all',''),
+    row('positive-class','(['+e+c+'])\\1',join(C,C),[join(C,C),C],
+      [[0,6],[0,3]],[[0,2],[0,1]]),
+    row('reverse-forward','(?<=\\1('+e+'))(?=('+c+'))\\2',join(pair,C),[C,E,C],
       [[4,7],[2,4],[4,7]],[[2,3],[1,2],[2,3]]),
-    row('local-s-decoder-excluded','(?s:(?<=.)('+c+'))',ec,[C,C],
-      [[2,5],[2,5]],[[1,2],[1,2]],'stock'),
-    row('migration-boundary','(?<='+e+')\\B('+c+')',ec,[C,C],
-      [[2,5],[2,5]],[[1,2],[1,2]]),
-    row('migration-forward','^(?=(?<=^)('+e+'))('+e+')$',E,[E,E,E],
-      [[0,2],[0,2],[0,2]],[[0,1],[0,1],[0,1]]),
-    row('migration-root','(?<='+e+')('+c+')',ec,[C,C],
-      [[2,5],[2,5]],[[1,2],[1,2]]),
-    row('nested-negative-backward','(?<!(?<!'+e+')'+c+')(!)',join(ec,bang),[bang,bang],
-      [[5,6],[5,6]],[[2,3],[2,3]]),
-    row('nested-negative-forward','(?<!(?='+e+')'+e+')(!)',join(E,bang),null),
-    plain('global-decoder-outside','(?-i:(?<='+e+'))([^a])',ec,[C,C],
-      [[2,5],[2,5]],[[1,2],[1,2]],'stock'),
-    plain('global-dispatch-outside','(?-i:(?<='+e+'))([^a'+r+'])',ec,[C,C],
-      [[2,5],[2,5]],[[1,2],[1,2]],'stock'),
-    plain('local-root-decoder-outside','(?i:(?-i:(?<='+e+')))([^a])',ec,[C,C],
-      [[2,5],[2,5]],[[1,2],[1,2]],'stock',''),
-    plain('local-root-dispatch-outside','(?i:(?-i:(?<='+e+')))([^a'+r+'])',ec,[C,C],
-      [[2,5],[2,5]],[[1,2],[1,2]],'stock','')
+    row('nullable-empty','^('+e+')?\\1$',empty,[empty,undefined],
+      [[0,0],undefined],[[0,0],undefined]),
+    row('zero-capture','^()\\1$',empty,[empty,empty],
+      [[0,0],[0,0]],[[0,0],[0,0]]),
+    row('decoder-inside','^(.)\\1$',pair,[pair,E],
+      [[0,4],[0,2]],[[0,2],[0,1]],'stock'),
+    plain('decoder-before','.(?-i:('+e+')\\1)',join(C,pair),[join(C,pair),E],
+      [[0,7],[3,5]],[[0,3],[1,2]],'stock'),
+    plain('decoder-after','(?-i:('+e+')\\1).',join(pair,C),[join(pair,C),E],
+      [[0,7],[0,2]],[[0,3],[0,1]],'stock'),
+    plain('local-decoder-after','(?i:(?-i:('+e+')\\1)).',join(pair,C),[join(pair,C),E],
+      [[0,7],[0,2]],[[0,3],[0,1]],'stock',''),
+    plain('local-decoder-before','.(?i:(?-i:('+e+')\\1))',join(C,pair),[join(C,pair),E],
+      [[0,7],[3,5]],[[0,3],[1,2]],'stock',''),
+    row('nested-decoder','(?i:(.))\\1',pair,[pair,E],
+      [[0,4],[0,2]],[[0,2],[0,1]],'stock'),
+    plain('folded-reference-excluded','(?-i:('+e+'))\\1',pair,[pair,E],
+      [[0,4],[0,2]],[[0,2],[0,1]],'stock'),
+    row('nested-folded-reference-excluded','(?i:('+e+')\\1)',pair,[pair,E],
+      [[0,4],[0,2]],[[0,2],[0,1]],'stock'),
+    row('migration-boundary','^\\B('+e+')\\B\\1\\B$',pair,[pair,E],
+      [[0,4],[0,2]],[[0,2],[0,1]]),
+    row('migration-lookahead','^(?=('+e+')\\1)('+e+e+')$',pair,[pair,E,pair],
+      [[0,4],[0,2],[0,4]],[[0,2],[0,1],[0,2]]),
+    row('migration-lookbehind','(?<=('+e+')\\1)('+c+')',join(pair,C),[C,E,C],
+      [[4,7],[2,4],[4,7]],[[2,3],[1,2],[2,3]]),
+    row('forward-dispatch','^([^a'+r+'])\\1$',join(C,C),[join(C,C),C],
+      [[0,6],[0,3]],[[0,2],[0,1]])
   );
+  for(const flag of ['g','y'])for(const [name,bo,so] of [
+    ['start',0,0],['inside',1,0],['next',2,1],['end',8,4]
+  ]) {
+    const found=name!=='end'&&!(byte&&flag==='y'&&name==='inside');
+    const bp=name==='start'?0:2,sp=name==='next'?1:0;
+    rows.push(row(flag+name,'('+e+')\\1',join(pair,pair),found?[pair,E]:null,
+      [[bp,bp+4],[bp,bp+2]],[[sp,sp+2],[sp,sp+1]],'all','i'+flag,byte?bo:so));
+  }
   function snapshot(match) {
     if (match === null) return null;
     const value = item => item === undefined ? undefined : units(item);
@@ -251,7 +230,7 @@
     const wrap = re => {
       let calls=0;
       re.exec=function(subject) {
-        if(++calls>64) throw Error('LOCAL_DISABLE_LOOKBEHINDS_BOUNDED_EXEC');
+        if(++calls>64) throw Error('LOCAL_DISABLE_BACKREFERENCES_BOUNDED_EXEC');
         return intrinsicExec.call(this,subject);
       };
       return re;
@@ -273,29 +252,38 @@
     }
     return [output,false];
   }
-  const subject=join(E,C,E),data=selected(subject),input=string(subject);
+  const subject=join(E,E,C,E,E),data=selected(subject),input=string(subject);
   for(const grammar of ['', 'u', 'v']) {
     const apiRows=[
-      ['positive','((?<='+e+'))',byte?[[2,2],[7,7]]:[[1,1],[3,3]]],
-      ['negative','((?<!'+e+'))',byte?[[0,0],[5,5]]:[[0,0],[2,2]]],
-      ['interior','((?<!^)(?<!$))',byte?[[2,2],[5,5]]:[[1,1],[2,2]]],
-      ['consuming','(?<='+e+')('+c+')',byte?[[2,5]]:[[1,2]]],
+      ['pair','('+e+')\\1',byte?[[0,4],[7,11]]:[[0,2],[3,5]],
+        byte?[[0,2],[7,9]]:[[0,1],[3,4]]],
+      ['lookahead','(?=('+e+'))\\1',byte?[[0,2],[2,4],[7,9],[9,11]]:[[0,1],[1,2],[3,4],[4,5]],
+        byte?[[0,2],[2,4],[7,9],[9,11]]:[[0,1],[1,2],[3,4],[4,5]]],
+      ['lookbehind','(?<=('+e+'))\\1',byte?[[2,4],[9,11]]:[[1,2],[4,5]],
+        byte?[[0,2],[7,9]]:[[0,1],[3,4]]],
+      ['empty','()\\1',byte?[[0,0],[2,2],[4,4],[7,7],[9,9],[11,11]]:
+        [[0,0],[1,1],[2,2],[3,3],[4,4],[5,5]],
+        byte?[[0,0],[2,2],[4,4],[7,7],[9,9],[11,11]]:
+        [[0,0],[1,1],[2,2],[3,3],[4,4],[5,5]]],
     ];
-    for(const [name,source,spans] of apiRows) {
-      const expectedMatches=spans.map(([start,end])=>{
-        const value=data.slice(start,end);
-        return [[value,value],start,[[start,end],[start,end]]];
+    for(const [name,source,spans,captures] of apiRows) {
+      const expectedMatches=spans.map(([start,end],i)=>{
+        const cap=captures[i];
+        return [[data.slice(start,end),data.slice(...cap)],start,[[start,end],cap]];
       });
       const replaced=[],split=[];
       let previous=0;
-      for(const [start,end] of spans) {
-        replaced.push(...data.slice(previous,start),60,...data.slice(start,end),62);
+      for(let i=0;i<spans.length;++i) {
+        const [start,end]=spans[i];
+        replaced.push(...data.slice(previous,start),60,...data.slice(...captures[i]),62);
         previous=end;
       }
       replaced.push(...data.slice(previous));
       previous=0;
-      for(const [start,end] of spans.filter(([s,e])=>s!==e||(s>0&&s<data.length))) {
-        split.push(data.slice(previous,start),data.slice(start,end));
+      for(let i=0;i<spans.length;++i) {
+        const [start,end]=spans[i];
+        if(start===end&&(start===0||start===data.length)) continue;
+        split.push(data.slice(previous,start),data.slice(...captures[i]));
         previous=end;
       }
       split.push(data.slice(previous));
@@ -309,7 +297,7 @@
           equal(tag+'replace',units(input.replace(re,'<$1>')),replaced,tag);
           const calls=[];
           equal(tag+'callback-result',units(input.replace(re,(m,capture,offset,original)=>{
-            if(calls.length>16) throw Error('LOCAL_DISABLE_LOOKBEHINDS_BOUNDED_CALLBACK');
+            if(calls.length>16) throw Error('LOCAL_DISABLE_BACKREFERENCES_BOUNDED_CALLBACK');
             calls.push([units(m),units(capture),offset,units(original)]);
             return '<'+capture+'>';
           })),replaced,tag);
@@ -327,12 +315,12 @@
   }
   equal('fixed-api-cases',apiCases,48);
   equal('fixed-api-checks',checks-apiStart+1,962);
-  equal('fixed-case-count',cases,978);
-  equal('fixed-check-count',checks+1,8792);
-  emit(encode({kind:'local-disable-lookbehinds-profile',profile,actualWidth:width}));
-  emit(encode({kind:'local-disable-lookbehinds',profile,
-    cases,checks,expectedCases:978,expectedChecks:8792,
+  equal('fixed-case-count',cases,1416);
+  equal('fixed-check-count',checks+1,12296);
+  emit(encode({kind:'local-disable-backreferences-profile',profile,actualWidth:width}));
+  emit(encode({kind:'local-disable-backreferences',profile,
+    cases,checks,expectedCases:1416,expectedChecks:12296,
     passed:failureCount===0,failureCount,failedCases:Array.from(failedCases),failures,
     failureDetailsTruncated:failureCount>failures.length,performanceTested:false}));
-  if(failureCount!==0) throw Error('LOCAL_DISABLE_LOOKBEHINDS_ORACLE: '+failureCount);
+  if(failureCount!==0) throw Error('LOCAL_DISABLE_BACKREFERENCES_ORACLE: '+failureCount);
 })();

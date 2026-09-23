@@ -130,7 +130,7 @@
     row('excluded-lookbehind','^(?=(?<=^)('+e+'))('+e+')$',E,[E,E,E],
       [[0,2],[0,2],[0,2]],[[0,1],[0,1],[0,1]]),
     row('excluded-backref','^(?=('+e+')\\1)('+e+e+')$',double,[double,E,double],
-      [[0,4],[0,2],[0,4]],[[0,2],[0,1],[0,2]],'stock'),
+      [[0,4],[0,2],[0,4]],[[0,2],[0,1],[0,2]]),
     row('named','^(?=(?<inside>'+e+'))(?<outside>'+e+')$',E,[E,E,E],
       [[0,2],[0,2],[0,2]],[[0,1],[0,1],[0,1]],'all','i',0,{inside:1,outside:2}),
     row('optional-empty','^(?:(?='+e+')('+e+'))?$',empty,[empty,undefined],
