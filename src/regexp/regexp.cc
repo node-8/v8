@@ -973,7 +973,9 @@ RegExpTree* GetNode8ComposedLiteralByteTree(RegExpTree* tree, RegExpFlags flags,
     return type == RegExpAssertion::Type::START_OF_INPUT ||
                    type == RegExpAssertion::Type::END_OF_INPUT ||
                    type == RegExpAssertion::Type::START_OF_LINE ||
-                   type == RegExpAssertion::Type::END_OF_LINE
+                   type == RegExpAssertion::Type::END_OF_LINE ||
+                   type == RegExpAssertion::Type::BOUNDARY ||
+                   type == RegExpAssertion::Type::NON_BOUNDARY
                ? tree
                : nullptr;
   }
