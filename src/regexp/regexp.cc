@@ -3013,9 +3013,7 @@ bool RegExpImpl::CompileIrregexpFromSource(
   }
 
 #ifdef V8_INTL_SUPPORT
-  if (v8_flags.utf8_string_semantics && is_one_byte && IsIgnoreCase(flags) &&
-      (original_tree->min_match() > 0 ||
-       original_tree->IsAnchoredAtStart())) {
+  if (v8_flags.utf8_string_semantics && is_one_byte && IsIgnoreCase(flags)) {
     ZoneList<RegExpTree*> literals(4, &zone);
     Node8CaseFoldState state;
     if (AppendNode8CaseFoldedLiteral(original_tree, flags, &zone, &literals,
