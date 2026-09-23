@@ -687,6 +687,28 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
     }
     return true;
   }
+  if (tree->IsDisjunction()) {
+    auto* branches = tree->AsDisjunction()->alternatives();
+    // Larger original choices can use prefix factoring and class merging.
+    // Keep them on the original route until lowering preserves those paths.
+    if (branches->length() != 2) return false;
+    auto* choices = zone->New<ZoneList<RegExpTree*>>(2, zone);
+    for (auto* branch : *branches) {
+      ZoneList<RegExpTree*> body(4, zone);
+      if (!AppendNode8CaseFoldedLiteral(branch, flags, zone, &body, state,
+                                       depth + 1) || body.is_empty()) {
+        return false;
+      }
+      choices->Add(body.length() == 1
+                       ? body.first()
+                       : zone->New<RegExpAlternative>(
+                             zone->New<ZoneList<RegExpTree*>>(body, zone)),
+                   zone);
+    }
+    output->Add(zone->New<RegExpDisjunction>(choices), zone);
+    state->used_extended_syntax = true;
+    return true;
+  }
   if (tree->IsCapture()) {
     auto* capture = tree->AsCapture();
     ZoneList<RegExpTree*> body(4, zone);
