@@ -295,4 +295,3 @@
     failureDetailsTruncated:failureCount>failures.length,performanceTested:false}));
   if(failureCount!==0) throw Error('CS_BOUNDARIES_ORACLE: '+failureCount);
 })();
-
