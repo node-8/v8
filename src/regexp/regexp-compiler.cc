@@ -2067,6 +2067,25 @@ void EmitWordCheck(RegExpMacroAssembler* assembler, Label* word,
                                      fall_through_on_word ? non_word : word);
 }
 
+// The Unicode word closure adds only U+017F and U+212A to ASCII.
+// The adjacent byte is already loaded; probe only their complete encodings.
+void EmitNode8FoldedWordCheck(RegExpMacroAssembler* assembler, int offset,
+                             bool backward, Label* word, Label* non_word) {
+  EmitWordCheck(assembler, word, non_word, false);
+  Label long_s;
+  assembler->CheckCharacter(backward ? 0xbf : 0xc5, &long_s);
+  assembler->CheckNotCharacter(backward ? 0xaa : 0xe2, non_word);
+  assembler->LoadCurrentCharacter(offset + (backward ? -2 : 1), non_word);
+  assembler->CheckNotCharacter(0x84, non_word);
+  assembler->LoadCurrentCharacter(offset + (backward ? -3 : 2), non_word);
+  assembler->CheckNotCharacter(backward ? 0xe2 : 0xaa, non_word);
+  assembler->GoTo(word);
+  assembler->Bind(&long_s);
+  assembler->LoadCurrentCharacter(offset + (backward ? -2 : 1), non_word);
+  assembler->CheckNotCharacter(backward ? 0xc5 : 0xbf, non_word);
+  assembler->GoTo(word);
+}
+
 // Check UTF-8 line boundaries without consuming or decoding the subject.
 EmitResult EmitNode8LineAssertion(RegExpCompiler* compiler,
                                  RegExpNode* on_success, Trace* trace,
@@ -2144,6 +2163,14 @@ EmitResult AssertionNode::EmitBoundaryCheck(RegExpCompiler* compiler,
   RegExpMacroAssembler* assembler = compiler->macro_assembler();
   Isolate* isolate = assembler->isolate();
   Trace::TriBool next_is_word_character = Trace::UNKNOWN;
+  const bool folded = is_node8_folded_boundary();
+  auto is_non_word = [folded](BoyerMoorePositionInfo* info) {
+    // The bitmap is conservative: collisions may only forgo this shortcut.
+    return info->is_non_word() &&
+           (!folded ||
+            (!info->at(0xc5 & BoyerMoorePositionInfo::kMask) &&
+             !info->at(0xe2 & BoyerMoorePositionInfo::kMask)));
+  };
   bool not_at_start = (trace->at_start() == Trace::FALSE_VALUE);
   BoyerMooreLookahead* lookahead = bm_info(not_at_start);
   if (lookahead == nullptr) {
@@ -2153,15 +2180,16 @@ EmitResult AssertionNode::EmitBoundaryCheck(RegExpCompiler* compiler,
       BoyerMooreLookahead* bm =
           zone()->New<BoyerMooreLookahead>(eats_at_least, compiler, zone());
       FillInBMInfo(isolate, 0, kRecursionBudget, bm, not_at_start);
-      if (bm->at(0)->is_non_word()) next_is_word_character = Trace::FALSE_VALUE;
+      if (is_non_word(bm->at(0))) next_is_word_character = Trace::FALSE_VALUE;
       if (bm->at(0)->is_word()) next_is_word_character = Trace::TRUE_VALUE;
     }
   } else {
-    if (lookahead->at(0)->is_non_word())
+    if (is_non_word(lookahead->at(0)))
       next_is_word_character = Trace::FALSE_VALUE;
     if (lookahead->at(0)->is_word()) next_is_word_character = Trace::TRUE_VALUE;
   }
-  bool at_boundary = (assertion_type_ == AssertionNode::AT_BOUNDARY);
+  bool at_boundary = assertion_type_ == AT_BOUNDARY ||
+                     assertion_type_ == NODE8_FOLDED_BOUNDARY;
   if (next_is_word_character == Trace::UNKNOWN) {
     Label before_non_word;
     Label before_word;
@@ -2169,7 +2197,12 @@ EmitResult AssertionNode::EmitBoundaryCheck(RegExpCompiler* compiler,
       assembler->LoadCurrentCharacter(trace->cp_offset(), &before_non_word);
     }
     // Fall through on non-word.
-    EmitWordCheck(assembler, &before_word, &before_non_word, false);
+    if (folded) {
+      EmitNode8FoldedWordCheck(assembler, trace->cp_offset(), false,
+                               &before_word, &before_non_word);
+    } else {
+      EmitWordCheck(assembler, &before_word, &before_non_word, false);
+    }
     // Next character is not a word character.
     assembler->Bind(&before_non_word);
     Label ok;
@@ -2224,7 +2257,13 @@ EmitResult AssertionNode::BacktrackIfPrevious(
   static_assert(Trace::kCPOffsetSlack == 1);
   assembler->LoadCurrentCharacter(new_trace.cp_offset() - 1, non_word,
                                   can_skip_bounds_check);
-  EmitWordCheck(assembler, word, non_word, backtrack_if_previous == kIsNonWord);
+  if (is_node8_folded_boundary()) {
+    EmitNode8FoldedWordCheck(assembler, new_trace.cp_offset(), true, word,
+                             non_word);
+  } else {
+    EmitWordCheck(assembler, word, non_word,
+                   backtrack_if_previous == kIsNonWord);
+  }
 
   assembler->Bind(&fall_through);
   return on_success()->Emit(compiler, &new_trace);
@@ -2289,6 +2328,13 @@ EmitResult AssertionNode::Emit(RegExpCompiler* compiler, Trace* trace) {
         return trace->Flush(compiler, this);
       }
       return EmitNode8LineAssertion(compiler, on_success(), trace, false);
+    case NODE8_FOLDED_BOUNDARY:
+    case NODE8_FOLDED_NON_BOUNDARY:
+      if (trace->cp_offset() - 3 < RegExpMacroAssembler::kMinCPOffset ||
+          trace->cp_offset() + 2 > RegExpMacroAssembler::kMaxCPOffset) {
+        return trace->Flush(compiler, this);
+      }
+      [[fallthrough]];
     case AT_BOUNDARY:
     case AT_NON_BOUNDARY: {
       return EmitBoundaryCheck(compiler, trace);

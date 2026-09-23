@@ -618,6 +618,7 @@ RegExpTree* GetNode8ForwardClassByteTree(ZoneList<CharacterRange>* ranges,
 
 #ifdef V8_INTL_SUPPORT
 struct Node8CaseFoldState {
+  bool contains_word_assertion = false;
   bool used_extended_syntax = false;
   bool needs_byte_lowering = false;
   Node8ComposedState classes;
@@ -649,7 +650,8 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
     return true;
   };
   auto append_code_point = [&](base::uc32 code_point,
-                               ZoneList<RegExpTree*>* destination) {
+                               ZoneList<RegExpTree*>* destination,
+                               bool direct_ascii = false) {
     auto* ranges =
         CharacterRange::List(zone, CharacterRange::Singleton(code_point));
     if (code_point == unibrow::Utf8::kBadChar) {
@@ -666,8 +668,9 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
       if (upper >= 'A' && upper <= 'Z') {
         ranges->Add(CharacterRange::Singleton(code_point ^ 0x20), zone);
       }
-      if (in_quantifier_body) {
-        // Keep closed ASCII loops on the direct byte-class path.
+      if (in_quantifier_body || direct_ascii) {
+        // Closed ASCII folds remain one byte, including inside literal runs.
+        CharacterRange::Canonicalize(ranges);
         destination->Add(zone->New<RegExpClassRanges>(
                              zone, ranges,
                              RegExpClassRanges::IS_CERTAINLY_ONE_CODE_POINT),
@@ -681,11 +684,24 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
   };
   if (tree->IsAtom()) {
     auto data = tree->AsAtom()->data();
+    RegExpText* ascii_run = nullptr;
     for (int i = 0; i < data.length(); ++i) {
       base::uc32 code_point = data[i];
       // Byte parsing preserves astral and surrogate values as uc32 leaves.
       if (code_point >= 0xd800 && code_point <= 0xdfff) return false;
-      if (!append_code_point(code_point, output)) return false;
+      if (!append_code_point(code_point, output, true)) return false;
+      if (code_point > 0x7f || (code_point | 0x20) == 'k' ||
+          (code_point | 0x20) == 's') {
+        ascii_run = nullptr;
+        continue;
+      }
+      // Keep long literals in one text node, not a deep successor chain.
+      RegExpTree* character = output->RemoveLast();
+      if (ascii_run == nullptr) {
+        ascii_run = zone->New<RegExpText>(zone);
+        output->Add(ascii_run, zone);
+      }
+      character->AppendToText(ascii_run, zone);
     }
     return true;
   }
@@ -844,6 +860,21 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
     return AppendNode8CaseFoldedLiteral(
         group->body(), group->flags(), zone, output, state, depth + 1,
         in_quantifier_body);
+  }
+  if (tree->IsAssertion() &&
+      (tree->AsAssertion()->assertion_type() ==
+           RegExpAssertion::Type::BOUNDARY ||
+       tree->AsAssertion()->assertion_type() ==
+           RegExpAssertion::Type::NON_BOUNDARY)) {
+    // Keep folding local to the assertion after the caller clears i/u/v.
+    // No encoded consuming node is inside this compiler-only group.
+    output->Add(zone->New<RegExpGroup>(
+                    tree, RegExpFlag::kIgnoreCase | RegExpFlag::kUnicode),
+                zone);
+    state->contains_word_assertion = true;
+    state->used_extended_syntax = true;
+    state->needs_byte_lowering = true;
+    return true;
   }
   if (tree->IsEmpty() ||
       (tree->IsAssertion() &&
@@ -3115,7 +3146,9 @@ bool RegExpImpl::CompileIrregexpFromSource(
                               : zone.New<RegExpAlternative>(
                                     zone.New<ZoneList<RegExpTree*>>(literals, &zone));
       // Do not retry an excluded scalar at one of its continuation bytes.
-      compile_data.node8_scalar_search = state.classes.contains_decoder;
+      compile_data.node8_scalar_search =
+          state.classes.contains_decoder ||
+          (state.contains_word_assertion && original_tree->min_match() == 0);
       compile_data.node8_decoder_sensitive =
           state.classes.contains_decoder &&
           Node8CanStartOnContinuation(compile_data.tree, &zone);

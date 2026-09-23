@@ -232,6 +232,12 @@ void DotPrinterImpl::VisitAssertion(AssertionNode* that) {
     case AssertionNode::NODE8_BEFORE_NEWLINE:
       os_ << "label=\"node-8 before newline\", shape=septagon";
       break;
+    case AssertionNode::NODE8_FOLDED_BOUNDARY:
+      os_ << "label=\"node-8 folded boundary\", shape=septagon";
+      break;
+    case AssertionNode::NODE8_FOLDED_NON_BOUNDARY:
+      os_ << "label=\"node-8 folded non-boundary\", shape=septagon";
+      break;
     case AssertionNode::NODE8_END_LITERAL:
       os_ << "label=\"node-8 end literal\", shape=septagon";
       break;

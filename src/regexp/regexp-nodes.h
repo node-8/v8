@@ -612,6 +612,8 @@ class AssertionNode : public SeqRegExpNode {
     AT_START,
     AT_BOUNDARY,
     AT_NON_BOUNDARY,
+    NODE8_FOLDED_BOUNDARY,
+    NODE8_FOLDED_NON_BOUNDARY,
     NODE8_BEFORE_NEWLINE,
     AFTER_NEWLINE,
     NODE8_END_LITERAL
@@ -627,6 +629,12 @@ class AssertionNode : public SeqRegExpNode {
   }
   static AssertionNode* AtNonBoundary(RegExpNode* on_success) {
     return on_success->zone()->New<AssertionNode>(AT_NON_BOUNDARY, on_success);
+  }
+  static AssertionNode* Node8FoldedBoundary(bool at_boundary,
+                                           RegExpNode* on_success) {
+    return on_success->zone()->New<AssertionNode>(
+        at_boundary ? NODE8_FOLDED_BOUNDARY : NODE8_FOLDED_NON_BOUNDARY,
+        on_success);
   }
   static AssertionNode* AfterNewline(RegExpNode* on_success) {
     return on_success->zone()->New<AssertionNode>(AFTER_NEWLINE, on_success);
@@ -660,6 +668,10 @@ class AssertionNode : public SeqRegExpNode {
  private:
   friend Zone;
 
+  bool is_node8_folded_boundary() const {
+    return assertion_type_ == NODE8_FOLDED_BOUNDARY ||
+           assertion_type_ == NODE8_FOLDED_NON_BOUNDARY;
+  }
   V8_WARN_UNUSED_RESULT EmitResult EmitBoundaryCheck(RegExpCompiler* compiler,
                                                      Trace* trace);
   enum IfPrevious { kIsNonWord, kIsWord };

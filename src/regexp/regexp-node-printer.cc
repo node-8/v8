@@ -209,6 +209,12 @@ void RegExpNodePrinter<RegExpNode>::VisitAssertion(AssertionNode* node) {
     case AssertionNode::AFTER_NEWLINE:
       os() << "after newline";
       break;
+    case AssertionNode::NODE8_FOLDED_BOUNDARY:
+      os() << "node-8 folded boundary";
+      break;
+    case AssertionNode::NODE8_FOLDED_NON_BOUNDARY:
+      os() << "node-8 folded non-boundary";
+      break;
     case AssertionNode::NODE8_BEFORE_NEWLINE:
       os() << "node-8 before newline";
       break;
