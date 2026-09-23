@@ -721,7 +721,7 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
   }
   if (tree->IsQuantifier()) {
     auto* quantifier = tree->AsQuantifier();
-    if (non_ascii_body || state->quantifier_count != 0 ||
+    if (non_ascii_body ||
         (!quantifier->is_greedy() && !quantifier->is_non_greedy()) ||
         quantifier->max() < 1) {
       return false;
