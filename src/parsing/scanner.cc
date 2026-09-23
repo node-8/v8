@@ -21,6 +21,7 @@
 #include "src/parsing/parse-info.h"
 #include "src/parsing/scanner-inl.h"
 #include "src/strings/unicode-decoder.h"
+#include "src/strings/unicode-inl.h"
 #include "src/zone/zone.h"
 
 namespace v8::internal {
@@ -1126,16 +1127,32 @@ bool Scanner::ScanRegExpPattern() {
     AddLiteralChar('=');
   }
 
+  auto append_character = [this]() {
+    if (c0_ >= 0xd800 && c0_ <= 0xdfff && node8_byte_source_) {
+      // Raw WTF-8 values are separate source characters, not UTF-16 units.
+      // Do not use the String-literal encoder's adjacent-surrogate pairing.
+      char encoded[unibrow::Utf8::kMaxEncodedSize];
+      unsigned length = unibrow::Utf8::Encode(
+          encoded, c0_, unibrow::Utf16::kNoPreviousCharacter, false);
+      for (unsigned i = 0; i < length; ++i) {
+        AddLiteralByte(static_cast<uint8_t>(encoded[i]));
+      }
+    } else {
+      AddLiteralChar(c0_);
+    }
+    Advance();
+  };
+
   while (c0_ != '/' || in_character_class) {
     if (c0_ == kEndOfInput || unibrow::IsLineTerminator(c0_)) {
       return false;
     }
     if (c0_ == '\\') {  // Escape sequence.
-      AddLiteralCharAdvance();
+      append_character();
       if (c0_ == kEndOfInput || unibrow::IsLineTerminator(c0_)) {
         return false;
       }
-      AddLiteralCharAdvance();
+      append_character();
       // If the escape allows more characters, i.e., \x??, \u????, or \c?,
       // only "safe" characters are allowed (letters, digits, underscore),
       // otherwise the escape isn't valid and the invalid character has
@@ -1146,7 +1163,7 @@ bool Scanner::ScanRegExpPattern() {
     } else {  // Unescaped character.
       if (c0_ == '[') in_character_class = true;
       if (c0_ == ']') in_character_class = false;
-      AddLiteralCharAdvance();
+      append_character();
     }
   }
   Advance();  // consume '/'

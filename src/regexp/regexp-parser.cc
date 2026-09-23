@@ -165,6 +165,14 @@ void RegExpTextBuilder::AddCharacter(base::uc16 c) {
 }
 
 void RegExpTextBuilder::AddUnicodeCharacter(base::uc32 c) {
+  if (v8_flags.utf8_string_semantics &&
+      (c > unibrow::Utf16::kMaxNonSurrogateCharCode ||
+       (c >= kLeadSurrogateStart && c <= kTrailSurrogateEnd))) {
+    // Keep complete byte-source characters separate, including independently
+    // encoded surrogate values. Quantifiers must bind before byte lowering.
+    AddClassRangesForDesugaring(c);
+    return;
+  }
   if (c > static_cast<base::uc32>(unibrow::Utf16::kMaxNonSurrogateCharCode)) {
     DCHECK(IsUnicodeMode());
     AddLeadSurrogate(unibrow::Utf16::LeadSurrogate(c));
@@ -553,6 +561,12 @@ class RegExpParserImpl final {
   void set_contains_anchor() { contains_anchor_ = true; }
   int captures_started() const { return captures_started_; }
   int position() const {
+    if constexpr (sizeof(CharT) == 1) {
+      if (v8_flags.utf8_string_semantics && current() != kEndMarker &&
+          current() > 0x7f) {
+        return node8_current_start_;
+      }
+    }
     const bool current_is_surrogate =
         current() != kEndMarker &&
         current() > unibrow::Utf16::kMaxNonSurrogateCharCode;
@@ -658,6 +672,10 @@ class RegExpParserImpl final {
   RegExpFlags flags_;
   bool force_unicode_ = false;  // Force parser to act as if unicode were set.
   int next_pos_;
+  // Only non-ASCII byte reads need an explicit source position. ASCII, stock
+  // and two-byte API input retain their existing cursor arithmetic.
+  int node8_current_start_ = 0;
+  bool node8_pattern_has_malformed_ = false;
   int captures_started_;
   int capture_count_;  // Only valid after we have scanned for captures.
   int quantifier_count_;
@@ -705,10 +723,26 @@ template <bool update_position>
 inline base::uc32 RegExpParserImpl<uint8_t>::ReadNext() {
   int position = next_pos_;
   base::uc16 c0 = InputAt(position);
+  base::uc32 result = c0;
   position++;
-  DCHECK(!unibrow::Utf16::IsLeadSurrogate(c0));
+  if (v8_flags.utf8_string_semantics && c0 > 0x7f) {
+    Wtf8ByteCursor cursor(
+        base::Vector<const uint8_t>(input_, input_length()),
+        Wtf8ByteCursor::Policy::kInternalWtf8, next_pos_);
+    Wtf8ByteCursor::Result decoded = cursor.DecodeNext();
+    if (decoded.status == Wtf8ByteCursor::Status::kValid) {
+      result = decoded.code_point;
+      position = static_cast<int>(cursor.position());
+    } else {
+      // The established pattern policy exposes malformed source bytes
+      // individually, rather than replacing the subject's maximal subpart.
+      DCHECK_EQ(decoded.status, Wtf8ByteCursor::Status::kReplaced);
+      if constexpr (update_position) node8_pattern_has_malformed_ = true;
+    }
+    if constexpr (update_position) node8_current_start_ = next_pos_;
+  }
   if (update_position) next_pos_ = position;
-  return c0;
+  return result;
 }
 
 template <>
@@ -719,7 +753,8 @@ inline base::uc32 RegExpParserImpl<base::uc16>::ReadNext() {
   base::uc32 result = c0;
   position++;
   // Read the whole surrogate pair in case of unicode mode, if possible.
-  if (IsUnicodeMode() && position < input_length() &&
+  if ((IsUnicodeMode() || v8_flags.utf8_string_semantics) &&
+      position < input_length() &&
       unibrow::Utf16::IsLeadSurrogate(c0)) {
     base::uc16 c1 = InputAt(position);
     if (unibrow::Utf16::IsTrailSurrogate(c1)) {
@@ -763,6 +798,16 @@ void RegExpParserImpl<CharT>::Advance() {
 template <class CharT>
 void RegExpParserImpl<CharT>::RewindByOneCodepoint() {
   if (!has_more()) return;
+  if constexpr (sizeof(CharT) == 1) {
+    if (v8_flags.utf8_string_semantics) {
+      // Both callers parse capture names: the preceding character is '<',
+      // the final hex digit of a Unicode escape, or its closing '}'.
+      DCHECK_GT(position(), 0);
+      DCHECK_LE(InputAt(position() - 1), 0x7f);
+      Reset(position() - 1);
+      return;
+    }
+  }
   // Rewinds by one code point, i.e.: two code units if `current` is outside
   // the basic multilingual plane (= composed of a lead and trail surrogate),
   // or one code unit otherwise.
@@ -1225,6 +1270,8 @@ RegExpTree* RegExpParserImpl<CharT>::ParseDisjunction() {
                 &is_escaped_unicode_character CHECK_FAILED);
             if (is_escaped_unicode_character) {
               builder->AddEscapedUnicodeCharacter(c);
+            } else if (v8_flags.utf8_string_semantics) {
+              builder->AddUnicodeCharacter(c);
             } else {
               builder->AddCharacter(c);
             }
@@ -1948,7 +1995,8 @@ bool RegExpParserImpl<CharT>::ParseUnicodeEscape(base::uc32* value) {
   }
   // \u but no {, or \u{...} escapes not allowed.
   bool result = ParseHexEscape(4, value);
-  if (result && IsUnicodeMode() && unibrow::Utf16::IsLeadSurrogate(*value) &&
+  if (result && (IsUnicodeMode() || v8_flags.utf8_string_semantics) &&
+      unibrow::Utf16::IsLeadSurrogate(*value) &&
       current() == '\\') {
     // Attempt to read trail surrogate.
     int start = position();
@@ -3082,8 +3130,19 @@ RegExpTree* RegExpParserImpl<CharT>::ParseCharacterClass(
     if (!ignore_case()) {
       character_class_flags |= RegExpClassRanges::NO_CASE_FOLDING_NEEDED;
     }
-    if (sizeof(CharT) == 1) {
-      // No surrogate pairs.
+    bool certainly_one = sizeof(CharT) == 1 && !v8_flags.utf8_string_semantics;
+    if (v8_flags.utf8_string_semantics && !is_negated && !ignore_case()) {
+      certainly_one = true;
+      for (CharacterRange range : *ranges) {
+        if (range.to() > 0x7f) {
+          certainly_one = false;
+          break;
+        }
+      }
+    }
+    if (certainly_one) {
+      // Byte source elements can decode to multibyte matching characters;
+      // only proven positive ASCII ranges retain the one-byte bound.
       character_class_flags |= RegExpClassRanges::IS_CERTAINLY_ONE_CODE_POINT;
     }
     return zone()->template New<RegExpClassRanges>(zone(), ranges,
@@ -3160,6 +3219,7 @@ bool RegExpParserImpl<CharT>::Parse(RegExpCompileData* result) {
   const int capture_count = captures_started();
   result->simple = tree->IsAtom() && simple() && capture_count == 0;
   result->contains_anchor = contains_anchor();
+  result->node8_pattern_has_malformed = node8_pattern_has_malformed_;
   result->capture_count = capture_count;
   result->named_captures = GetNamedCaptures();
   return true;
@@ -3292,23 +3352,6 @@ bool RegExpBuilder::AddQuantifierToAtom(
 template class RegExpParserImpl<uint8_t>;
 template class RegExpParserImpl<base::uc16>;
 
-void DecodeNode8RegExpBytes(base::Vector<const uint8_t> bytes,
-                            ZoneVector<base::uc16>* decoded) {
-  decoded->reserve(bytes.length());
-  Wtf8ByteCursor cursor(bytes, Wtf8ByteCursor::Policy::kInternalWtf8);
-  while (cursor.has_next()) {
-    size_t start = cursor.position();
-    Wtf8ByteCursor::Result next = cursor.DecodeNext();
-    if (next.status == Wtf8ByteCursor::Status::kReplaced) {
-      for (size_t i = start; i < cursor.position(); i++) {
-        decoded->push_back(bytes[i]);
-      }
-    } else {
-      push_code_unit(decoded, next.code_point);
-    }
-  }
-}
-
 }  // namespace
 
 // static
@@ -3321,16 +3364,6 @@ bool RegExpParser::ParseRegExpFromHeapString(Isolate* isolate, Zone* zone,
   String::FlatContent content = input->GetFlatContent(no_gc);
   if (content.IsOneByte()) {
     base::Vector<const uint8_t> v = content.ToOneByteVector();
-    if (v8_flags.utf8_string_semantics &&
-        NonAsciiStart(v.begin(), v.length()) <
-            static_cast<uint32_t>(v.length())) {
-      ZoneVector<base::uc16> decoded(zone);
-      DecodeNode8RegExpBytes(v, &decoded);
-      return RegExpParserImpl<base::uc16>{
-          decoded.data(), static_cast<int>(decoded.size()), flags,
-          stack_limit,    zone,                             no_gc}
-          .Parse(result);
-    }
     return RegExpParserImpl<uint8_t>{v.begin(),   v.length(), flags,
                                      stack_limit, zone,       no_gc}
         .Parse(result);
@@ -3349,20 +3382,6 @@ bool RegExpParser::VerifyRegExpSyntax(Zone* zone, uintptr_t stack_limit,
                                       RegExpFlags flags,
                                       RegExpCompileData* result,
                                       const DisallowGarbageCollection& no_gc) {
-  if constexpr (sizeof(CharT) == sizeof(uint8_t)) {
-    const uint8_t* bytes = reinterpret_cast<const uint8_t*>(input);
-    if (v8_flags.utf8_string_semantics &&
-        NonAsciiStart(bytes, input_length) <
-            static_cast<uint32_t>(input_length)) {
-      ZoneVector<base::uc16> decoded(zone);
-      DecodeNode8RegExpBytes(
-          base::Vector<const uint8_t>(bytes, input_length), &decoded);
-      return RegExpParserImpl<base::uc16>{
-          decoded.data(), static_cast<int>(decoded.size()), flags,
-          stack_limit,    zone,                             no_gc}
-          .Parse(result);
-    }
-  }
   return RegExpParserImpl<CharT>{input,       input_length, flags,
                                  stack_limit, zone,         no_gc}
       .Parse(result);

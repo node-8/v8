@@ -53,6 +53,9 @@ struct RegExpCompileData {
   // A replacement-capable first consumer can match an interior continuation;
   // nonempty graph bounds alone do not justify arbitrary byte search skips.
   bool node8_decoder_sensitive = false;
+  // Compilation-local source provenance for the raw malformed literal route.
+  // Set only after successful parsing, without a separate source validation.
+  bool node8_pattern_has_malformed = false;
 
   // Only set if the pattern contains named captures.
   // Note: the lifetime equals that of the parse/compile zone.

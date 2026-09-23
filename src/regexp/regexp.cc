@@ -211,61 +211,80 @@ bool IsAsciiPattern(DirectHandle<String> pattern) {
   return true;
 }
 
-bool ContainsMalformedNode8Bytes(DirectHandle<String> source) {
+// This source check is sufficient only after the literal AST proof below.
+// It preserves raw malformed needles, not escaped/grouped/class spellings.
+bool IsNode8RawLiteralSource(DirectHandle<String> source) {
   DCHECK(source->IsFlat());
   DisallowGarbageCollection no_gc;
   String::FlatContent content = source->GetFlatContent(no_gc);
   if (!content.IsOneByte()) return false;
-  Wtf8ByteCursor cursor(content.ToByteVector(),
-                        Wtf8ByteCursor::Policy::kInternalWtf8);
-  while (cursor.has_next()) {
-    if (cursor.DecodeNext().status == Wtf8ByteCursor::Status::kReplaced) {
-      return true;
+  for (uint8_t byte : content.ToByteVector()) {
+    if (byte == '\\' || byte == '[' || byte == '(') return false;
+  }
+  return true;
+}
+
+// Read only the original parsed tree, never an already byte-lowered tree.
+// Each leaf is independently encoded: two raw surrogate leaves stay six bytes.
+bool AppendNode8LiteralBytes(RegExpTree* tree, RegExpFlags flags, Zone* zone,
+                             ZoneVector<uint8_t>* bytes, int depth = 0) {
+  if (depth > 100) return false;
+  auto append = [&](base::uc32 code_point) {
+    if (code_point > 0x10ffff || code_point == unibrow::Utf8::kBadChar) {
+      return false;
     }
+    char encoded[unibrow::Utf8::kMaxEncodedSize];
+    unsigned length = unibrow::Utf8::Encode(
+        encoded, code_point, unibrow::Utf16::kNoPreviousCharacter, false);
+    if (bytes->size() > String::kMaxLength - length) return false;
+    for (unsigned i = 0; i < length; ++i) {
+      bytes->push_back(static_cast<uint8_t>(encoded[i]));
+    }
+    return true;
+  };
+  if (tree->IsAtom()) {
+    for (base::uc16 unit : tree->AsAtom()->data()) {
+      // The byte parser puts complete astral and lone-surrogate values in
+      // singleton code-point terms. Do not repair broken provenance here.
+      if ((unit >= 0xd800 && unit <= 0xdfff) || !append(unit)) return false;
+    }
+    return true;
+  }
+  if (tree->IsClassRanges()) {
+    auto* character_class = tree->AsClassRanges();
+    if (character_class->is_negated() ||
+        character_class->character_set().is_standard() ||
+        character_class->node8_positive_non_ascii_tree() != nullptr ||
+        character_class->node8_accepts_all_non_ascii() ||
+        character_class->node8_packed_class_plan() != nullptr) {
+      return false;
+    }
+    auto* ranges = character_class->ranges(zone);
+    return ranges->length() == 1 &&
+           ranges->first().from() == ranges->first().to() &&
+           append(ranges->first().from());
+  }
+  if (tree->IsText()) {
+    for (const auto& element : *tree->AsText()->elements()) {
+      if (!AppendNode8LiteralBytes(element.tree(), flags, zone, bytes,
+                                    depth + 1)) return false;
+    }
+    return true;
+  }
+  if (tree->IsAlternative()) {
+    for (auto* node : *tree->AsAlternative()->nodes()) {
+      if (!AppendNode8LiteralBytes(node, flags, zone, bytes, depth + 1)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (tree->IsGroup()) {
+    auto* group = tree->AsGroup();
+    return group->flags() == flags &&
+           AppendNode8LiteralBytes(group->body(), flags, zone, bytes, depth + 1);
   }
   return false;
-}
-
-MaybeDirectHandle<String> NewWtf8AtomString(
-    Isolate* isolate, DirectHandle<String> source,
-    base::Vector<const base::uc16> pattern) {
-  source = String::Flatten(isolate, source);
-  if (ContainsMalformedNode8Bytes(source)) {
-    // The parser preserves malformed source bytes in the atom data. Keep
-    // those bytes raw instead of turning U+00xx into canonical UTF-8.
-    return source;
-  }
-  std::vector<uint8_t> bytes(pattern.length() * 3);
-  unibrow::Utf8::EncodingResult encoded = unibrow::Utf8::Encode(
-      pattern, reinterpret_cast<char*>(bytes.data()), bytes.size(), false,
-      false);
-  CHECK_EQ(encoded.characters_processed, pattern.size());
-  return isolate->factory()->NewStringFromOneByte(
-      base::Vector<const uint8_t>(bytes.data(), encoded.bytes_written));
-}
-
-MaybeDirectHandle<String> NewWtf8CodePointString(Isolate* isolate,
-                                                  base::uc32 code_point) {
-  char bytes[unibrow::Utf8::kMaxEncodedSize];
-  unsigned length = unibrow::Utf8::Encode(
-      bytes, code_point, unibrow::Utf16::kNoPreviousCharacter, false);
-  return isolate->factory()->NewStringFromOneByte(base::Vector<const uint8_t>(
-      reinterpret_cast<const uint8_t*>(bytes), length));
-}
-
-std::optional<base::Vector<const base::uc16>> GetLiteralAtomPattern(
-    RegExpTree* tree, ZoneVector<base::uc16>* scratch) {
-  if (tree->IsAtom()) return tree->AsAtom()->data();
-  DCHECK(tree->IsText());
-
-  ZoneList<TextElement>* elements = tree->AsText()->elements();
-  for (int i = 0; i < elements->length(); i++) {
-    TextElement element = elements->at(i);
-    if (element.text_type() != TextElement::ATOM) return std::nullopt;
-    base::Vector<const base::uc16> atom = element.atom()->data();
-    scratch->insert(scratch->end(), atom.begin(), atom.end());
-  }
-  return base::Vector<const base::uc16>(scratch->data(), scratch->size());
 }
 
 std::optional<base::uc32> GetSingletonClassCodePoint(RegExpTree* tree,
@@ -431,7 +450,7 @@ RegExpTree* NewNode8ByteSequenceTree(const Node8ByteSequence& sequence,
   return zone->New<RegExpAlternative>(nodes);
 }
 
-RegExpTree* GetPositiveClassByteTree(RegExpTree* tree, RegExpFlags flags,
+RegExpTree* GetPositiveClassByteTree(RegExpTree* tree, RegExpFlags,
                                      Zone* zone,
                                      bool non_ascii_only = false) {
   if (!tree->IsClassRanges()) return nullptr;
@@ -445,11 +464,6 @@ RegExpTree* GetPositiveClassByteTree(RegExpTree* tree, RegExpFlags flags,
   for (CharacterRange range : *ranges) {
     // Matching U+FFFD also requires the malformed-subpart decoder fallback.
     if (range.Contains(unibrow::Utf8::kBadChar)) return nullptr;
-    // Legacy syntax can split one supplementary literal into two surrogates.
-    if (!IsEitherUnicode(flags) && range.from() <= 0xdfff &&
-        range.to() >= 0xd800) {
-      return nullptr;
-    }
     contains_non_ascii |= range.to() > unibrow::Utf8::kMaxOneByteChar;
   }
   if (!contains_non_ascii) return nullptr;
@@ -535,24 +549,10 @@ void AppendNode8MalformedAlternatives(ZoneList<RegExpTree*>* choices,
 }
 
 RegExpTree* GetNode8ForwardClassByteTree(ZoneList<CharacterRange>* ranges,
-                                         bool negated, RegExpFlags flags,
+                                         bool negated, RegExpFlags,
                                          Node8ComposedState* state,
                                          Zone* zone) {
   CharacterRange::Canonicalize(ranges);
-  // In legacy syntax an astral source character may have become two surrogate
-  // members. If all surrogate units and all astral code points are already
-  // included, both forms are redundant. BMP holes such as FEFF in \S are safe.
-  const bool covers_astral = !ranges->is_empty() &&
-                             ranges->last().from() <= 0x10000 &&
-                             ranges->last().to() == 0x10ffff;
-  if (!IsEitherUnicode(flags)) {
-    for (CharacterRange range : *ranges) {
-      if (range.from() <= 0xdfff && range.to() >= 0xd800 &&
-          !(covers_astral && range.from() <= 0xd800 && range.to() >= 0xdfff)) {
-        return nullptr;
-      }
-    }
-  }
   if (negated) {
     auto* complement =
         zone->New<ZoneList<CharacterRange>>(ranges->length() + 1, zone);
@@ -698,9 +698,7 @@ RegExpTree* GetNode8ComposedLiteralByteTree(RegExpTree* tree, RegExpFlags flags,
     bool non_ascii = false;
     bool replacement = false;
     for (base::uc16 unit : data) {
-      if (!IsEitherUnicode(flags) && unit >= 0xd800 && unit <= 0xdfff) {
-        return nullptr;
-      }
+      if (unit >= 0xd800 && unit <= 0xdfff) return nullptr;
       non_ascii |= unit > 0x7f;
       replacement |= unit == unibrow::Utf8::kBadChar;
     }
@@ -730,12 +728,6 @@ RegExpTree* GetNode8ComposedLiteralByteTree(RegExpTree* tree, RegExpFlags flags,
         DCHECK_NOT_NULL(consumer);
         nodes->Add(consumer, zone);
         continue;
-      }
-      if (unibrow::Utf16::IsLeadSurrogate(code_point) &&
-          i + 1 < data.length() &&
-          unibrow::Utf16::IsTrailSurrogate(data[i + 1])) {
-        code_point = unibrow::Utf16::CombineSurrogatePair(data[i], data[i + 1]);
-        ++i;
       }
       char encoded[unibrow::Utf8::kMaxEncodedSize];
       unsigned length = unibrow::Utf8::Encode(
@@ -952,7 +944,7 @@ bool GetNode8PackedByteRange(Node8ByteRange range, uint8_t* value,
 }
 
 Node8PackedClassPlan* GetNode8PackedReplacementClassPlan(
-    RegExpTree* tree, RegExpFlags flags, Zone* zone) {
+    RegExpTree* tree, RegExpFlags, Zone* zone) {
   if (!tree->IsClassRanges()) return nullptr;
   RegExpClassRanges* character_class = tree->AsClassRanges();
   if (character_class->is_negated()) return nullptr;
@@ -963,10 +955,6 @@ Node8PackedClassPlan* GetNode8PackedReplacementClassPlan(
   bool contains_replacement = false;
   for (CharacterRange range : *ranges) {
     contains_replacement |= range.Contains(unibrow::Utf8::kBadChar);
-    if (!IsEitherUnicode(flags) && range.from() <= 0xdfff &&
-        range.to() >= 0xd800) {
-      return nullptr;
-    }
   }
   if (!contains_replacement) return nullptr;
 
@@ -1696,17 +1684,12 @@ RegExpTree* GetMixedCaptureWrappedGreedyRunClass(
 }
 
 ZoneList<CharacterRange>* GetNode8DecoderClassRanges(
-    RegExpTree* tree, RegExpFlags flags, Zone* zone, bool force_decoder,
+    RegExpTree* tree, RegExpFlags, Zone* zone, bool force_decoder,
     bool* is_negated) {
   if (!tree->IsClassRanges()) return nullptr;
   RegExpClassRanges* character_class = tree->AsClassRanges();
   ZoneList<CharacterRange>* ranges = character_class->ranges(zone);
   CharacterRange::Canonicalize(ranges);
-  if (!IsEitherUnicode(flags)) {
-    for (CharacterRange range : *ranges) {
-      if (range.from() <= 0xdfff && range.to() >= 0xd800) return nullptr;
-    }
-  }
 
   *is_negated = character_class->is_negated();
   if (*is_negated || force_decoder) return ranges;
@@ -1832,51 +1815,42 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
                                    parse_result.capture_count);
     has_been_compiled = true;
   } else if (parse_result.simple && !IsIgnoreCase(flags) && !IsSticky(flags) &&
-             (!v8_flags.utf8_string_semantics || IsAsciiPattern(pattern)) &&
-             !HasFewDifferentCharacters(pattern)) {
+             (!v8_flags.utf8_string_semantics || IsAsciiPattern(pattern))) {
     // Parse-tree is a single atom that is equal to the pattern.
-    RegExpImpl::AtomCompile(isolate, re, pattern, flags, pattern);
-    has_been_compiled = true;
-  } else if ((parse_result.tree->IsAtom() ||
-              (v8_flags.utf8_string_semantics &&
-               parse_result.tree->IsText())) &&
+    // A low-alphabet miss stays Irregexp without collecting the same needle.
+    if (!HasFewDifferentCharacters(pattern)) {
+      RegExpImpl::AtomCompile(isolate, re, pattern, flags, pattern);
+      has_been_compiled = true;
+    }
+  } else if (v8_flags.utf8_string_semantics && !IsIgnoreCase(flags) &&
              !IsSticky(flags) && parse_result.capture_count == 0) {
-    // The pattern source might (?) contain escape sequences, but they're
-    // resolved in atom_string.
-    ZoneVector<base::uc16> compound_atom(&zone);
-    std::optional<base::Vector<const base::uc16>> atom_pattern =
-        GetLiteralAtomPattern(parse_result.tree, &compound_atom);
-    if (atom_pattern.has_value() &&
-        (!v8_flags.utf8_string_semantics ||
-         std::find(atom_pattern->begin(), atom_pattern->end(),
-                   unibrow::Utf8::kBadChar) == atom_pattern->end())) {
+    ZoneVector<uint8_t> bytes(&zone);
+    if (AppendNode8LiteralBytes(parse_result.tree, flags, &zone, &bytes) &&
+        !bytes.empty() &&
+        (!parse_result.node8_pattern_has_malformed ||
+         IsNode8RawLiteralSource(pattern))) {
       DirectHandle<String> atom_string;
-      if (v8_flags.utf8_string_semantics) {
-        ASSIGN_RETURN_ON_EXCEPTION(
-            isolate, atom_string,
-            NewWtf8AtomString(isolate, pattern, atom_pattern.value()));
+      if (parse_result.node8_pattern_has_malformed) {
+        atom_string = pattern;
       } else {
         ASSIGN_RETURN_ON_EXCEPTION(
             isolate, atom_string,
-            isolate->factory()->NewStringFromTwoByte(atom_pattern.value()));
+            isolate->factory()->NewStringFromOneByte(
+                base::Vector<const uint8_t>(bytes.data(), bytes.size())));
       }
-      if (!IsIgnoreCase(flags) && !HasFewDifferentCharacters(atom_string)) {
+      if (!HasFewDifferentCharacters(atom_string)) {
         RegExpImpl::AtomCompile(isolate, re, pattern, flags, atom_string);
         has_been_compiled = true;
       }
     }
-  } else if (v8_flags.utf8_string_semantics && !IsIgnoreCase(flags) &&
-             !IsSticky(flags) && parse_result.capture_count == 0 &&
-             parse_result.tree->IsClassRanges()) {
-    std::optional<base::uc32> code_point =
-        GetSingletonClassCodePoint(parse_result.tree, &zone);
-    if (code_point.has_value() &&
-        code_point.value() != unibrow::Utf8::kBadChar &&
-        !ContainsMalformedNode8Bytes(pattern)) {
-      DirectHandle<String> atom_string;
-      ASSIGN_RETURN_ON_EXCEPTION(
-          isolate, atom_string,
-          NewWtf8CodePointString(isolate, code_point.value()));
+  } else if (!v8_flags.utf8_string_semantics && parse_result.tree->IsAtom() &&
+             !IsSticky(flags) && parse_result.capture_count == 0) {
+    DirectHandle<String> atom_string;
+    ASSIGN_RETURN_ON_EXCEPTION(
+        isolate, atom_string,
+        isolate->factory()->NewStringFromTwoByte(
+            parse_result.tree->AsAtom()->data()));
+    if (!IsIgnoreCase(flags) && !HasFewDifferentCharacters(atom_string)) {
       RegExpImpl::AtomCompile(isolate, re, pattern, flags, atom_string);
       has_been_compiled = true;
     }
@@ -1981,7 +1955,7 @@ MaybeDirectHandle<Object> RegExp::Compile(Isolate* isolate,
         node8_class_outer_capture_count = 0;
       }
       if (node8_class_ranges != nullptr &&
-          ContainsMalformedNode8Bytes(pattern)) {
+          parse_result.node8_pattern_has_malformed) {
         node8_class_ranges = nullptr;
         is_wtf8_class_negated = false;
         is_wtf8_class_run = false;
@@ -2911,7 +2885,9 @@ bool RegExpImpl::CompileIrregexpFromSource(
       }
     }
     if (byte_tree != nullptr) {
-      if (!ContainsMalformedNode8Bytes(pattern)) compile_data.tree = byte_tree;
+      if (!compile_data.node8_pattern_has_malformed) {
+        compile_data.tree = byte_tree;
+      }
     }
   }
 
@@ -2928,7 +2904,7 @@ bool RegExpImpl::CompileIrregexpFromSource(
           (state.contains_lookbehind || state.contains_backreference)) &&
         !(state.contains_forward_dispatch && state.contains_lookbehind) &&
         (byte_tree != original_tree || scalar_search) &&
-        !ContainsMalformedNode8Bytes(pattern)) {
+        !compile_data.node8_pattern_has_malformed) {
       compile_data.tree = byte_tree;
       // ASCII identity trees such as (?!^|$) need this search strategy too.
       compile_data.node8_scalar_search = scalar_search;
@@ -2943,7 +2919,7 @@ bool RegExpImpl::CompileIrregexpFromSource(
       compile_data.capture_count == 0) {
     ZoneList<RegExpTree*> literals(4, &zone);
     if (AppendNode8CaseFoldedLiteral(compile_data.tree, &zone, &literals) &&
-        !literals.is_empty() && !ContainsMalformedNode8Bytes(pattern)) {
+        !literals.is_empty() && !compile_data.node8_pattern_has_malformed) {
       compile_data.tree = literals.length() == 1
                               ? literals.first()
                               : zone.New<RegExpAlternative>(

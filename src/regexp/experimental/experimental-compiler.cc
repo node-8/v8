@@ -73,29 +73,28 @@ class CanBeHandledVisitor final : private RegExpVisitor {
 
   void* VisitClassRanges(RegExpClassRanges* node, void*) override {
     if (!v8_flags.utf8_string_semantics) return nullptr;
-    // Initial eligibility precedes Irregexp's decoder-aware byte lowering.
-    // Negated classes need that lowering even when they exclude U+FFFD.
-    if (node->is_negated()) {
+    // This engine reparses the original AST, not Irregexp's lowered byte tree.
+    // Only proven ASCII consumers can compare source values with subject bytes.
+    if (node->is_negated() || node->node8_positive_non_ascii_tree() != nullptr ||
+        node->node8_accepts_all_non_ascii() ||
+        node->node8_packed_class_plan() != nullptr) {
       result_ = false;
       return nullptr;
     }
     auto set = node->character_set();
     if (set.is_standard()) {
       switch (set.standard_set_type()) {
-        case StandardCharacterSet::kNotWhitespace:
-        case StandardCharacterSet::kNotWord:
-        case StandardCharacterSet::kNotDigit:
-        case StandardCharacterSet::kNotLineTerminator:
-        case StandardCharacterSet::kEverything:
-          result_ = false;
+        case StandardCharacterSet::kWord:
+        case StandardCharacterSet::kDigit:
           break;
         default:
+          result_ = false;
           break;
       }
     } else {
       // Nonstandard sets already own their ranges; no Zone/allocation needed.
       for (CharacterRange range : *node->ranges(nullptr)) {
-        if (range.Contains(unibrow::Utf8::kBadChar)) {
+        if (range.to() > unibrow::Utf8::kMaxOneByteChar) {
           result_ = false;
           break;
         }
@@ -106,6 +105,14 @@ class CanBeHandledVisitor final : private RegExpVisitor {
 
   void* VisitClassSetOperand(RegExpClassSetOperand* node, void*) override {
     result_ = !node->has_strings();
+    if (result_ && v8_flags.utf8_string_semantics) {
+      for (CharacterRange range : *node->ranges()) {
+        if (range.to() > unibrow::Utf8::kMaxOneByteChar) {
+          result_ = false;
+          break;
+        }
+      }
+    }
     return nullptr;
   }
 
@@ -122,7 +129,7 @@ class CanBeHandledVisitor final : private RegExpVisitor {
   void* VisitAtom(RegExpAtom* node, void*) override {
     if (v8_flags.utf8_string_semantics) {
       for (base::uc16 unit : node->data()) {
-        if (unit == unibrow::Utf8::kBadChar) {
+        if (unit > unibrow::Utf8::kMaxOneByteChar) {
           result_ = false;
           break;
         }
