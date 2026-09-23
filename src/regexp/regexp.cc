@@ -617,8 +617,14 @@ RegExpTree* GetNode8ForwardClassByteTree(ZoneList<CharacterRange>* ranges,
 }
 
 #ifdef V8_INTL_SUPPORT
-bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, Zone* zone,
-                                 ZoneList<RegExpTree*>* output, int depth = 0) {
+struct Node8CaseFoldState {
+  bool used_extended_syntax = false;
+  bool needs_byte_lowering = false;
+};
+
+bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zone,
+                                 ZoneList<RegExpTree*>* output,
+                                 Node8CaseFoldState* state, int depth = 0) {
   if (depth > 100) return false;
   auto append_code_point = [&](base::uc32 code_point) {
     // Replacement matching also needs malformed-subpart decoding.
@@ -636,6 +642,7 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, Zone* zone,
     }
     ZoneVector<Node8ByteSequence> sequences(zone);
     for (CharacterRange range : *ranges) {
+      state->needs_byte_lowering |= range.to() > 0x7f;
       if (!AddNode8CodePointRange(range, &sequences)) return false;
     }
     auto* choices = zone->New<ZoneList<RegExpTree*>>(
@@ -653,12 +660,8 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, Zone* zone,
     auto data = tree->AsAtom()->data();
     for (int i = 0; i < data.length(); ++i) {
       base::uc32 code_point = data[i];
-      if (unibrow::Utf16::IsLeadSurrogate(code_point) &&
-          i + 1 < data.length() &&
-          unibrow::Utf16::IsTrailSurrogate(data[i + 1])) {
-        code_point = unibrow::Utf16::CombineSurrogatePair(data[i], data[i + 1]);
-        ++i;
-      }
+      // Byte parsing preserves astral and surrogate values as uc32 leaves.
+      if (code_point >= 0xd800 && code_point <= 0xdfff) return false;
       if (!append_code_point(code_point)) return false;
     }
     return true;
@@ -668,7 +671,8 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, Zone* zone,
   }
   if (tree->IsText()) {
     for (const auto& element : *tree->AsText()->elements()) {
-      if (!AppendNode8CaseFoldedLiteral(element.tree(), zone, output, depth + 1)) {
+      if (!AppendNode8CaseFoldedLiteral(element.tree(), flags, zone, output,
+                                        state, depth + 1)) {
         return false;
       }
     }
@@ -676,10 +680,47 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, Zone* zone,
   }
   if (tree->IsAlternative()) {
     for (auto* node : *tree->AsAlternative()->nodes()) {
-      if (!AppendNode8CaseFoldedLiteral(node, zone, output, depth + 1)) {
+      if (!AppendNode8CaseFoldedLiteral(node, flags, zone, output, state,
+                                        depth + 1)) {
         return false;
       }
     }
+    return true;
+  }
+  if (tree->IsCapture()) {
+    auto* capture = tree->AsCapture();
+    ZoneList<RegExpTree*> body(4, zone);
+    if (!AppendNode8CaseFoldedLiteral(capture->body(), flags, zone, &body,
+                                      state, depth + 1) || body.is_empty()) {
+      return false;
+    }
+    auto* result = zone->New<RegExpCapture>(capture->index());
+    result->set_name(capture->name());
+    result->set_body(body.length() == 1
+                         ? body.first()
+                         : zone->New<RegExpAlternative>(
+                               zone->New<ZoneList<RegExpTree*>>(body, zone)));
+    output->Add(result, zone);
+    state->used_extended_syntax = true;
+    return true;
+  }
+  if (tree->IsGroup()) {
+    auto* group = tree->AsGroup();
+    if (group->flags() != flags) return false;
+    // The caller clears internal i/u/v after lowering. Retaining this wrapper
+    // would restore those flags and fold the encoded bytes a second time.
+    state->used_extended_syntax = true;
+    return AppendNode8CaseFoldedLiteral(group->body(), flags, zone, output,
+                                        state, depth + 1);
+  }
+  if (tree->IsEmpty() ||
+      (tree->IsAssertion() &&
+       (tree->AsAssertion()->assertion_type() ==
+            RegExpAssertion::Type::START_OF_INPUT ||
+        tree->AsAssertion()->assertion_type() ==
+            RegExpAssertion::Type::END_OF_INPUT))) {
+    output->Add(tree, zone);
+    state->used_extended_syntax = true;
     return true;
   }
   return false;
@@ -2916,10 +2957,15 @@ bool RegExpImpl::CompileIrregexpFromSource(
 
 #ifdef V8_INTL_SUPPORT
   if (v8_flags.utf8_string_semantics && is_one_byte && IsIgnoreCase(flags) &&
-      compile_data.capture_count == 0) {
+      original_tree->min_match() > 0) {
     ZoneList<RegExpTree*> literals(4, &zone);
-    if (AppendNode8CaseFoldedLiteral(compile_data.tree, &zone, &literals) &&
-        !literals.is_empty() && !compile_data.node8_pattern_has_malformed) {
+    Node8CaseFoldState state;
+    if (AppendNode8CaseFoldedLiteral(original_tree, flags, &zone, &literals,
+                                     &state) &&
+        !literals.is_empty() && !compile_data.node8_pattern_has_malformed &&
+        // Preserve the original matching code for newly admitted ASCII-safe
+        // compositions; existing pure-literal lowering remains unchanged.
+        (!state.used_extended_syntax || state.needs_byte_lowering)) {
       compile_data.tree = literals.length() == 1
                               ? literals.first()
                               : zone.New<RegExpAlternative>(
