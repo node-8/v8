@@ -487,6 +487,7 @@ RegExpTree* GetPositiveClassByteTree(RegExpTree* tree, RegExpFlags,
 
 struct Node8ComposedState {
   bool contains_lookaround = false;
+  bool contains_word_assertion = false;
   bool contains_decoder = false;
   bool contains_lookbehind = false;
   bool contains_backreference = false;
@@ -618,7 +619,6 @@ RegExpTree* GetNode8ForwardClassByteTree(ZoneList<CharacterRange>* ranges,
 
 #ifdef V8_INTL_SUPPORT
 struct Node8CaseFoldState {
-  bool contains_word_assertion = false;
   bool used_extended_syntax = false;
   bool needs_byte_lowering = false;
   Node8ComposedState classes;
@@ -871,7 +871,7 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
     output->Add(zone->New<RegExpGroup>(
                     tree, RegExpFlag::kIgnoreCase | RegExpFlag::kUnicode),
                 zone);
-    state->contains_word_assertion = true;
+    state->classes.contains_word_assertion = true;
     state->used_extended_syntax = true;
     state->needs_byte_lowering = true;
     return true;
@@ -894,7 +894,7 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
 }
 #endif  // V8_INTL_SUPPORT
 
-// Lower only complete, case-sensitive compositions. Existing byte trees must
+// Lower only complete compositions under case-sensitive roots. Byte trees must
 // not pass through here: their atom values are already encoded bytes.
 RegExpTree* GetNode8ComposedLiteralByteTree(RegExpTree* tree, RegExpFlags flags,
                                             Zone* zone,
@@ -1015,6 +1015,27 @@ RegExpTree* GetNode8ComposedLiteralByteTree(RegExpTree* tree, RegExpFlags flags,
     // The parser already resolves dotAll ranges and multiline assertions.
     const RegExpFlags parsed_flags =
         RegExpFlag::kDotAll | RegExpFlag::kMultiline;
+#ifdef V8_INTL_SUPPORT
+    const RegExpFlags local_fold_flags = parsed_flags | RegExpFlag::kIgnoreCase;
+    if (!IsIgnoreCase(flags) && IsIgnoreCase(group->flags()) &&
+        (group->flags() & ~local_fold_flags) == (flags & ~local_fold_flags)) {
+      ZoneList<RegExpTree*> literals(4, zone);
+      Node8CaseFoldState folded;
+      folded.classes = *state;
+      if (!AppendNode8CaseFoldedLiteral(group->body(), group->flags(), zone,
+                                       &literals, &folded, depth + 1) ||
+          literals.is_empty()) {
+        return nullptr;
+      }
+      if (!folded.needs_byte_lowering) return tree;
+      *state = folded.classes;
+      // The child already folds scalars; do not restore i on encoded bytes.
+      return literals.length() == 1
+                 ? literals.first()
+                 : zone->New<RegExpAlternative>(
+                       zone->New<ZoneList<RegExpTree*>>(literals, zone));
+    }
+#endif  // V8_INTL_SUPPORT
     if ((group->flags() & ~parsed_flags) != (flags & ~parsed_flags)) {
       return nullptr;
     }
@@ -3115,7 +3136,8 @@ bool RegExpImpl::CompileIrregexpFromSource(
         GetNode8ComposedLiteralByteTree(original_tree, flags, &zone, &state);
     const bool scalar_search =
         state.contains_decoder ||
-        (state.contains_lookaround && original_tree->min_match() == 0);
+        ((state.contains_lookaround || state.contains_word_assertion) &&
+         original_tree->min_match() == 0);
     if (byte_tree != nullptr &&
         !(state.contains_decoder &&
           (state.contains_lookbehind || state.contains_backreference)) &&
@@ -3148,7 +3170,8 @@ bool RegExpImpl::CompileIrregexpFromSource(
       // Do not retry an excluded scalar at one of its continuation bytes.
       compile_data.node8_scalar_search =
           state.classes.contains_decoder ||
-          (state.contains_word_assertion && original_tree->min_match() == 0);
+          (state.classes.contains_word_assertion &&
+           original_tree->min_match() == 0);
       compile_data.node8_decoder_sensitive =
           state.classes.contains_decoder &&
           Node8CanStartOnContinuation(compile_data.tree, &zone);
