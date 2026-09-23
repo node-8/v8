@@ -721,13 +721,12 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
   }
   if (tree->IsQuantifier()) {
     auto* quantifier = tree->AsQuantifier();
-    if (non_ascii_body ||
-        (!quantifier->is_greedy() && !quantifier->is_non_greedy()) ||
+    if ((!quantifier->is_greedy() && !quantifier->is_non_greedy()) ||
         quantifier->max() < 1) {
       return false;
     }
     ZoneList<RegExpTree*> lowered_body(1, zone);
-    // Keep ASCII/mixed closures, nullable bodies and nested loops unchanged.
+    // Keep ASCII/mixed closures and zero-width body nodes unchanged.
     if (!AppendNode8CaseFoldedLiteral(quantifier->body(), flags, zone,
                                      &lowered_body, state, depth + 1, true) ||
         lowered_body.is_empty()) {
