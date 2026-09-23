@@ -620,7 +620,6 @@ RegExpTree* GetNode8ForwardClassByteTree(ZoneList<CharacterRange>* ranges,
 struct Node8CaseFoldState {
   bool used_extended_syntax = false;
   bool needs_byte_lowering = false;
-  int quantifier_count = 0;
 };
 
 bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zone,
@@ -741,7 +740,6 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
                     quantifier->quantifier_type(), quantifier->index(),
                     repeated_body),
                 zone);
-    ++state->quantifier_count;
     state->used_extended_syntax = true;
     return true;
   }
@@ -3023,8 +3021,6 @@ bool RegExpImpl::CompileIrregexpFromSource(
     if (AppendNode8CaseFoldedLiteral(original_tree, flags, &zone, &literals,
                                      &state) &&
         !literals.is_empty() && !compile_data.node8_pattern_has_malformed &&
-        (state.quantifier_count == 0 ||
-         original_tree->IsAnchoredAtStart()) &&
         // Preserve the original matching code for newly admitted ASCII-safe
         // compositions; existing pure-literal lowering remains unchanged.
         (!state.used_extended_syntax || state.needs_byte_lowering)) {
