@@ -119,5 +119,9 @@ assertMatchIndices(
 assertMatchIndices(
     [[0, 49], [0, 40], [38, 40]], regexp('', exactMixed(20), tail9, 'duy'),
     field20 + tail9);
-// Ignore-case composition remains a separate migration.
-assertNull(regexp('', exactMixed(20), tail9, 'dui').exec(field20 + tail9));
+// Ignore-case classes preserve the same byte spans and captures.
+assertEquals(
+    [field20 + tail9, field20, eCircumflex],
+    Array.from(assertMatchIndices(
+        [[0, 49], [0, 40], [38, 40]], regexp('', exactMixed(20), tail9, 'dui'),
+        field20 + tail9)));

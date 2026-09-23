@@ -229,5 +229,9 @@ assertMatchIndices(
 assertMatchIndices(
     [[0, 6], [0, 4]], /([A-C\u00e9-\u00eb]+)xy/duy,
     eAcute + eCircumflex + 'xy');
-// Ignore-case composition remains a separate migration.
-assertNull(/([a-c\u00e9-\u00eb]+)xy/dui.exec(eAcute + eCircumflex + 'xy'));
+// Ignore-case classes preserve the same byte spans and captures.
+assertEquals(
+    [eAcute + eCircumflex + 'xy', eAcute + eCircumflex],
+    Array.from(assertMatchIndices(
+        [[0, 6], [0, 4]], /([a-c\u00e9-\u00eb]+)xy/dui,
+        eAcute + eCircumflex + 'xy')));

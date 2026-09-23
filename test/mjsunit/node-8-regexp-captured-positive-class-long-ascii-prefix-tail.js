@@ -167,5 +167,9 @@ assertMatchIndices(
     field + String.fromCodePoint(0x4e2d));
 assertMatchIndices(
     [[0, 21], [0, 4], [2, 4]], regexp('', mixedSource, tail17, 'duy'), field + tail17);
-// Ignore-case composition remains a separate migration.
-assertNull(regexp('', mixedSource, tail17, 'dui').exec(field + tail17));
+// Ignore-case classes preserve the same byte spans and captures.
+assertEquals(
+    [field + tail17, field, eCircumflex],
+    Array.from(assertMatchIndices(
+        [[0, 21], [0, 4], [2, 4]], regexp('', mixedSource, tail17, 'dui'),
+        field + tail17)));

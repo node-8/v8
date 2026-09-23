@@ -110,7 +110,11 @@ assertMatchIndices(
     new RegExp('((?:^key=' + mixedExact + '!|none))', 'du'), subject);
 assertMatchIndices(
     [[0, 10], [4, 9], [6, 9]], expression(mixedExact, '', 'duy'), subject);
-// Ignore-case and modifier groups remain outside this generic lowering.
-assertNull(expression(mixedExact, '', 'dui').exec(subject));
+// Positive ignore-case classes are supported; modifier groups remain separate.
+assertEquals(
+    [subject, field, cjk],
+    Array.from(assertMatchIndices(
+        [[0, 10], [4, 9], [6, 9]], expression(mixedExact, '', 'dui'),
+        subject)));
 assertNull(
     new RegExp('(?i:^key=' + mixedExact + '!|none)', 'du').exec(subject));

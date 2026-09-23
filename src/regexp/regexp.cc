@@ -627,6 +627,26 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
                                  Node8CaseFoldState* state, int depth = 0,
                                  bool in_quantifier_body = false) {
   if (depth > 100) return false;
+  auto append_ranges = [&](ZoneList<CharacterRange>* ranges,
+                           ZoneList<RegExpTree*>* destination) {
+    ZoneVector<Node8ByteSequence> sequences(zone);
+    for (CharacterRange range : *ranges) {
+      // Replacement matching also needs malformed-subpart decoding.
+      if (range.Contains(unibrow::Utf8::kBadChar)) return false;
+      state->needs_byte_lowering |= range.to() > 0x7f;
+      if (!AddNode8CodePointRange(range, &sequences)) return false;
+    }
+    auto* choices = zone->New<ZoneList<RegExpTree*>>(
+        static_cast<int>(sequences.size()), zone);
+    for (const auto& sequence : sequences) {
+      choices->Add(NewNode8ByteSequenceTree(sequence, zone), zone);
+    }
+    destination->Add(choices->length() == 1
+                         ? choices->first()
+                         : zone->New<RegExpDisjunction>(choices),
+                     zone);
+    return true;
+  };
   auto append_code_point = [&](base::uc32 code_point,
                                ZoneList<RegExpTree*>* destination) {
     // Replacement matching also needs malformed-subpart decoding.
@@ -650,21 +670,7 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
     } else {
       CharacterRange::AddUnicodeCaseEquivalents(ranges, zone);
     }
-    ZoneVector<Node8ByteSequence> sequences(zone);
-    for (CharacterRange range : *ranges) {
-      state->needs_byte_lowering |= range.to() > 0x7f;
-      if (!AddNode8CodePointRange(range, &sequences)) return false;
-    }
-    auto* choices = zone->New<ZoneList<RegExpTree*>>(
-        static_cast<int>(sequences.size()), zone);
-    for (const auto& sequence : sequences) {
-      choices->Add(NewNode8ByteSequenceTree(sequence, zone), zone);
-    }
-    destination->Add(choices->length() == 1
-                         ? choices->first()
-                         : zone->New<RegExpDisjunction>(choices),
-                     zone);
-    return true;
+    return append_ranges(ranges, destination);
   };
   if (tree->IsAtom()) {
     auto data = tree->AsAtom()->data();
@@ -678,6 +684,42 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
   }
   if (auto code_point = GetSingletonClassCodePoint(tree, zone)) {
     return append_code_point(*code_point, output);
+  }
+  ZoneList<CharacterRange>* class_ranges = nullptr;
+  if (tree->IsClassRanges()) {
+    auto* character_class = tree->AsClassRanges();
+    if (character_class->is_negated()) return false;
+    class_ranges = character_class->ranges(zone);
+  } else if (tree->IsClassSetOperand()) {
+    auto* operand = tree->AsClassSetOperand();
+    if (operand->has_strings()) return false;
+    class_ranges = operand->ranges();
+  } else if (tree->IsClassSetExpression()) {
+    auto* expression = tree->AsClassSetExpression();
+    if (expression->is_negated() ||
+        expression->operation() !=
+            RegExpClassSetExpression::OperationType::kUnion ||
+        expression->operands()->length() != 1) {
+      return false;
+    }
+    return AppendNode8CaseFoldedLiteral(
+        expression->operands()->first(), flags, zone, output, state, depth + 1,
+        in_quantifier_body);
+  }
+  if (class_ranges != nullptr) {
+    // A later unsupported node must leave the original tree untouched.
+    auto* ranges = zone->New<ZoneList<CharacterRange>>(*class_ranges, zone);
+    CharacterRange::Canonicalize(ranges);
+    CharacterRange::AddUnicodeCaseEquivalents(ranges, zone);
+    state->used_extended_syntax = true;
+    if (ranges->is_empty() || ranges->last().to() <= 0x7f) {
+      output->Add(zone->New<RegExpClassRanges>(
+                      zone, ranges,
+                      RegExpClassRanges::IS_CERTAINLY_ONE_CODE_POINT),
+                  zone);
+      return true;
+    }
+    return append_ranges(ranges, output);
   }
   if (tree->IsText()) {
     for (const auto& element : *tree->AsText()->elements()) {

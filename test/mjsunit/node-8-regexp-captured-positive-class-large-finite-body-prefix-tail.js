@@ -242,5 +242,8 @@ assertMatchIndices(
 assertMatchIndices(
     [[0, 6], [0, 4], [2, 4]], /(([A-C\u00e9-\u00eb]){1,20})xy/duy,
     eAcute + eCircumflex + 'xy');
-assertNull(
-    /(([a-c\u00e9-\u00eb]){1,20})xy/dui.exec(eAcute + eCircumflex + 'xy'));
+assertEquals(
+    [eAcute + eCircumflex + 'xy', eAcute + eCircumflex, eCircumflex],
+    Array.from(assertMatchIndices(
+        [[0, 6], [0, 4], [2, 4]], /(([a-c\u00e9-\u00eb]){1,20})xy/dui,
+        eAcute + eCircumflex + 'xy')));
