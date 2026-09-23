@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// Flags: --utf8-string-semantics
-// Fixed stock/byte oracles for reverse-safe Unicode-folded lookbehinds.
+// Fixed oracles. Intended profile is checked by the driver.
+// Fixed stock/byte oracles for reverse-safe local-i-disable lookbehinds.
 'use strict';
 
 (() => {
@@ -55,12 +55,12 @@
   const raw=bytes=>fixture(bytes,bytes);
   const row=(id,source,subject,values,bytes,stock,
              condition='all',extraFlags='i',start=0,names)=>
-    ({id,source,subject,values,bytes,stock,condition,extraFlags,start,names});
+    ({id,source:'(?-i:'+source+')',subject,values,bytes,stock,condition,extraFlags,start,names});
   const rows=[],bang=ascii('!');
   for(const [name,pattern,target,fold] of [
-    ['latin',E,EC,'all'],['kelvin',ascii('k'),K,'unicode'],
-    ['long-s',ascii('s'),S,'unicode'],['cjk',C,C,'all'],
-    ['ascii',ascii('a'),ascii('A'),'all'],['astral',A,A,'all']
+    ['latin',E,E,'all'],['kelvin',K,K,'all'],
+    ['long-s',S,S,'all'],['cjk',C,C,'all'],
+    ['ascii',ascii('a'),ascii('a'),'all']
   ]) {
     const p=string(pattern),b=target.bytes.length,s=target.stock.length;
     const subject=join(target,bang),double=join(target,target,bang);
@@ -99,7 +99,7 @@
   for(const item of [...rows]) {
     rows.push({...item,id:'local-'+item.id,source:'(?i:'+item.source+')',extraFlags:''});
   }
-  const e=string(E),c=string(C),r=string(R),double=join(EC,EC);
+  const e=string(E),c=string(C),r=string(R),double=join(E,E);
   rows.push(
     row('ascii-one-scalar','(?<!^)(?<!$)',E,null),
     row('ascii-end','(?<!^)',E,[empty],[[2,2]],[[1,1]]),
@@ -110,51 +110,75 @@
   ]) {
     const found=flag==='g'||name==='after'||name==='end';
     const bp=name==='end'?4:2,sp=name==='end'?2:1;
-    rows.push(row(flag+name,'(?<=('+e+'))',double,found?[empty,EC]:null,
+    rows.push(row(flag+name,'(?<=('+e+'))',double,found?[empty,E]:null,
       [[bp,bp],[bp-2,bp]],[[sp,sp],[sp-1,sp]],'all','i'+flag,byte?bo:so));
   }
   const ec=join(E,C),upper=join(EC,C),malformed=join(raw([0x80]),C);
+  const plain=(...args)=>{
+    const item=row(...args);
+    item.source=args[1];
+    return item;
+  };
   rows.push(
-    row('positive-class','(?<=['+e+c+'])(!)',join(EC,bang),[bang,bang],
+    row('positive-class','(?<=['+e+c+'])(!)',join(E,bang),[bang,bang],
       [[2,3],[2,3]],[[1,2],[1,2]]),
-    row('sensitive-child','(?<=(?-i:'+e+'))('+c+')',ec,[C,C],
-      [[2,5],[2,5]],[[1,2],[1,2]]),
-    row('sensitive-child-reject','(?<=(?-i:'+e+'))('+c+')',upper,null),
-    row('sensitive-child-forward','(?<=(?-i:(?='+e+')'+e+'))('+c+')',ec,[C,C],
-      [[2,5],[2,5]],[[1,2],[1,2]]),
-    row('local-m','(?m:(?<=^'+e+')('+c+')$)',join(LS,EC,C,PS),[C,C],
+    row('case-reject','(?<='+e+')('+c+')',upper,null),
+    row('kelvin-reject','(?<=k)(!)',join(K,bang),null),
+    row('long-s-reject','(?<=s)(!)',join(S,bang),null),
+    row('ascii-reject','(?<=a)(!)',ascii('A!'),null),
+    row('nested-enable','(?<=(?i:('+e+')))('+c+')',upper,[C,EC,C],
+      [[2,5],[0,2],[2,5]],[[1,2],[0,1],[1,2]]),
+    row('nested-enable-disable','(?<=(?i:(?-i:('+e+'))))('+c+')',ec,[C,E,C],
+      [[2,5],[0,2],[2,5]],[[1,2],[0,1],[1,2]]),
+    row('nested-enable-reject','(?<=(?i:(?-i:'+e+')))('+c+')',upper,null),
+    plain('restore-after','(?-i:(?<='+e+')('+c+'))('+e+')',join(E,C,EC),
+      [join(C,EC),C,EC],[[2,7],[2,5],[5,7]],[[1,3],[1,2],[2,3]]),
+    plain('restore-before','('+e+')(?-i:(?<='+c+')(!))',join(C,EC,bang),null),
+    row('local-m','(?m:(?<=^'+e+')('+c+')$)',join(LS,E,C,PS),[C,C],
       [[5,8],[5,8]],[[2,3],[2,3]]),
-    row('named','(?<=(?<before>'+e+'))(?<after>'+c+')',upper,[C,EC,C],
+    row('named','(?<=(?<before>'+e+'))(?<after>'+c+')',ec,[C,E,C],
       [[2,5],[0,2],[2,5]],[[1,2],[0,1],[1,2]],'all','i',0,{before:1,after:2}),
     row('optional-empty','^(?:(?<=('+e+'))('+c+'))?$',empty,[empty,undefined,undefined],
       [[0,0],undefined,undefined],[[0,0],undefined,undefined]),
-    row('optional-full','(?:(?<=('+e+'))('+c+'))?$',upper,[C,EC,C],
+    row('optional-full','(?:(?<=('+e+'))('+c+'))?$',ec,[C,E,C],
       [[2,5],[0,2],[2,5]],[[1,2],[0,1],[1,2]]),
     row('branches','(?:(?<=('+e+'))('+c+')|(?<=('+c+'))(!))',join(C,bang),
       [bang,undefined,undefined,C,bang],
       [[3,4],undefined,undefined,[0,3],[3,4]],
       [[1,2],undefined,undefined,[0,1],[1,2]]),
-    row('boundaries','(?<=\\B('+e+'))\\B('+c+')',upper,[C,EC,C],
+    row('boundaries','(?<=\\B('+e+'))\\B('+c+')',ec,[C,E,C],
       [[2,5],[0,2],[2,5]],[[1,2],[0,1],[1,2]]),
-    row('malformed-decoder-excluded','(?<=.)('+c+')',malformed,[C,C],
+    row('decoder-inside-excluded','(?<=.)('+c+')',malformed,[C,C],
       [[1,4],[1,4]],[[1,2],[1,2]],'stock'),
-    row('decoder-outside-excluded','(?<='+e+')([^a])',upper,[C,C],
+    row('decoder-outside-excluded','(?<='+e+')([^a])',ec,[C,C],
       [[2,5],[2,5]],[[1,2],[1,2]],'stock'),
-    row('forward-dispatch-inside-excluded','(?<=[^a'+r+'])('+c+')',ec,[C,C],
+    row('dispatch-inside-excluded','(?<=[^a'+r+'])('+c+')',ec,[C,C],
       [[2,5],[2,5]],[[1,2],[1,2]],'stock'),
-    row('forward-dispatch-outside-excluded','(?<='+e+')([^a'+r+'])',upper,[C,C],
+    row('dispatch-outside-excluded','(?<='+e+')([^a'+r+'])',ec,[C,C],
       [[2,5],[2,5]],[[1,2],[1,2]],'stock'),
-    row('backref-excluded','(?<=('+e+')\\1)('+c+')',join(double,C),[C,EC,C],
+    row('astral-sensitive','(?<='+string(A)+')('+c+')',join(A,C),[C,C],
+      [[4,7],[4,7]],[[2,3],[2,3]]),
+    row('backref-excluded','(?<=('+e+')\\1)('+c+')',join(double,C),[C,E,C],
       [[4,7],[2,4],[4,7]],[[2,3],[1,2],[2,3]],'stock'),
-    row('local-disable-excluded','(?-i:(?<='+e+')('+c+'))',ec,[C,C],
-      [[2,5],[2,5]],[[1,2],[1,2]]),
-    row('local-s-decoder-excluded','(?s:(?<=.)('+c+'))',upper,[C,C],
+    row('local-s-decoder-excluded','(?s:(?<=.)('+c+'))',ec,[C,C],
       [[2,5],[2,5]],[[1,2],[1,2]],'stock'),
-    row('migration-forward-with-behind','^(?=(?<=^)('+e+'))('+e+')$',EC,[EC,EC,EC],
+    row('migration-boundary','(?<='+e+')\\B('+c+')',ec,[C,C],
+      [[2,5],[2,5]],[[1,2],[1,2]]),
+    row('migration-forward','^(?=(?<=^)('+e+'))('+e+')$',E,[E,E,E],
       [[0,2],[0,2],[0,2]],[[0,1],[0,1],[0,1]]),
-    row('nested-negative-backward','(?<!(?<!'+e+')'+c+')(!)',join(upper,bang),[bang,bang],
+    row('migration-root','(?<='+e+')('+c+')',ec,[C,C],
+      [[2,5],[2,5]],[[1,2],[1,2]]),
+    row('nested-negative-backward','(?<!(?<!'+e+')'+c+')(!)',join(ec,bang),[bang,bang],
       [[5,6],[5,6]],[[2,3],[2,3]]),
-    row('nested-negative-forward','(?<!(?='+e+')'+e+')(!)',join(EC,bang),null)
+    row('nested-negative-forward','(?<!(?='+e+')'+e+')(!)',join(E,bang),null),
+    plain('global-decoder-outside','(?-i:(?<='+e+'))([^a])',ec,[C,C],
+      [[2,5],[2,5]],[[1,2],[1,2]],'stock'),
+    plain('global-dispatch-outside','(?-i:(?<='+e+'))([^a'+r+'])',ec,[C,C],
+      [[2,5],[2,5]],[[1,2],[1,2]],'stock'),
+    plain('local-root-decoder-outside','(?i:(?-i:(?<='+e+')))([^a])',ec,[C,C],
+      [[2,5],[2,5]],[[1,2],[1,2]],'stock',''),
+    plain('local-root-dispatch-outside','(?i:(?-i:(?<='+e+')))([^a'+r+'])',ec,[C,C],
+      [[2,5],[2,5]],[[1,2],[1,2]],'stock','')
   );
   function snapshot(match) {
     if (match === null) return null;
@@ -222,11 +246,12 @@
   const intrinsicExec = RegExp.prototype.exec;
   let apiCases = 0;
   function makeApi(source, flags, slow, local) {
+    source='(?-i:'+source+')';
     if(local) {source='(?i:'+source+')';flags=flags.replace('i','');}
     const wrap = re => {
       let calls=0;
       re.exec=function(subject) {
-        if(++calls>64) throw Error('FOLDED_LOOKBEHINDS_BOUNDED_EXEC');
+        if(++calls>64) throw Error('LOCAL_DISABLE_LOOKBEHINDS_BOUNDED_EXEC');
         return intrinsicExec.call(this,subject);
       };
       return re;
@@ -248,7 +273,7 @@
     }
     return [output,false];
   }
-  const subject=join(EC,C,E),data=selected(subject),input=string(subject);
+  const subject=join(E,C,E),data=selected(subject),input=string(subject);
   for(const grammar of ['', 'u', 'v']) {
     const apiRows=[
       ['positive','((?<='+e+'))',byte?[[2,2],[7,7]]:[[1,1],[3,3]]],
@@ -284,7 +309,7 @@
           equal(tag+'replace',units(input.replace(re,'<$1>')),replaced,tag);
           const calls=[];
           equal(tag+'callback-result',units(input.replace(re,(m,capture,offset,original)=>{
-            if(calls.length>16) throw Error('FOLDED_LOOKBEHINDS_BOUNDED_CALLBACK');
+            if(calls.length>16) throw Error('LOCAL_DISABLE_LOOKBEHINDS_BOUNDED_CALLBACK');
             calls.push([units(m),units(capture),offset,units(original)]);
             return '<'+capture+'>';
           })),replaced,tag);
@@ -302,12 +327,12 @@
   }
   equal('fixed-api-cases',apiCases,48);
   equal('fixed-api-checks',checks-apiStart+1,962);
-  equal('fixed-case-count',cases,1050);
-  equal('fixed-check-count',checks+1,9368);
-  emit(encode({kind:'folded-lookbehinds-profile',profile,actualWidth:width}));
-  emit(encode({kind:'folded-lookbehinds',profile,
-    cases,checks,expectedCases:1050,expectedChecks:9368,
+  equal('fixed-case-count',cases,978);
+  equal('fixed-check-count',checks+1,8792);
+  emit(encode({kind:'local-disable-lookbehinds-profile',profile,actualWidth:width}));
+  emit(encode({kind:'local-disable-lookbehinds',profile,
+    cases,checks,expectedCases:978,expectedChecks:8792,
     passed:failureCount===0,failureCount,failedCases:Array.from(failedCases),failures,
     failureDetailsTruncated:failureCount>failures.length,performanceTested:false}));
-  if(failureCount!==0) throw Error('FOLDED_LOOKBEHINDS_ORACLE: '+failureCount);
+  if(failureCount!==0) throw Error('LOCAL_DISABLE_LOOKBEHINDS_ORACLE: '+failureCount);
 })();
