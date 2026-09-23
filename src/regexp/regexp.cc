@@ -972,9 +972,13 @@ RegExpTree* GetNode8ComposedLiteralByteTree(RegExpTree* tree, RegExpFlags flags,
   }
   if (tree->IsGroup()) {
     auto* group = tree->AsGroup();
-    if (group->flags() != flags) return nullptr;
+    // DotAll is already reflected in the parsed character ranges.
+    if ((group->flags() & ~RegExpFlag::kDotAll) !=
+        (flags & ~RegExpFlag::kDotAll)) {
+      return nullptr;
+    }
     RegExpTree* lowered = GetNode8ComposedLiteralByteTree(
-        group->body(), flags, zone, state, depth + 1);
+        group->body(), group->flags(), zone, state, depth + 1);
     if (lowered == nullptr) return nullptr;
     return lowered == group->body()
                ? tree
