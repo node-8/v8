@@ -650,10 +650,16 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
   };
   auto append_code_point = [&](base::uc32 code_point,
                                ZoneList<RegExpTree*>* destination) {
-    // Replacement matching also needs malformed-subpart decoding.
-    if (code_point == unibrow::Utf8::kBadChar) return false;
     auto* ranges =
         CharacterRange::List(zone, CharacterRange::Singleton(code_point));
+    if (code_point == unibrow::Utf8::kBadChar) {
+      auto* lowered = GetNode8ForwardClassByteTree(
+          ranges, false, flags, &state->classes, zone);
+      if (lowered == nullptr) return false;
+      destination->Add(lowered, zone);
+      state->needs_byte_lowering = true;
+      return true;
+    }
     if (code_point <= 0x7f && (code_point | 0x20) != 'k' &&
         (code_point | 0x20) != 's') {
       base::uc32 upper = code_point & ~0x20;
@@ -684,9 +690,7 @@ bool AppendNode8CaseFoldedLiteral(RegExpTree* tree, RegExpFlags flags, Zone* zon
     return true;
   }
   if (auto code_point = GetSingletonClassCodePoint(tree, zone)) {
-    if (*code_point != unibrow::Utf8::kBadChar) {
-      return append_code_point(*code_point, output);
-    }
+    return append_code_point(*code_point, output);
   }
   ZoneList<CharacterRange>* class_ranges = nullptr;
   bool negated_class = false;
